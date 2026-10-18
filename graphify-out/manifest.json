@@ -1,0 +1,132 @@
+{
+  "app/layout.tsx": {
+    "mtime": 1792080869.2921073,
+    "ast_hash": "bc75df60e074247556786cfa9df69e7c",
+    "semantic_hash": ""
+  },
+  "app/page.tsx": {
+    "mtime": 1792057014.6971917,
+    "ast_hash": "546cdc5adbed89d0877e349e4d88392f",
+    "semantic_hash": ""
+  },
+  "components/ActiveNavigation.tsx": {
+    "mtime": 1792254499.0533733,
+    "ast_hash": "26de821b020c52b663a7f70b551f4b4f",
+    "semantic_hash": ""
+  },
+  "components/LocationInput.tsx": {
+    "mtime": 1790876924.468301,
+    "ast_hash": "2f6b114cc747c34e919b524ba62be952",
+    "semantic_hash": ""
+  },
+  "components/RoutePlanner.tsx": {
+    "mtime": 1790873557.055652,
+    "ast_hash": "459cb44397cc545b945f93d76c92d1ab",
+    "semantic_hash": ""
+  },
+  "components/ServiceWorkerRegister.tsx": {
+    "mtime": 1790868143.2013192,
+    "ast_hash": "76d1ba782e622005e83b3313be9f8f47",
+    "semantic_hash": ""
+  },
+  "components/SolidMap.tsx": {
+    "mtime": 1792056995.082021,
+    "ast_hash": "914e3759a1db4de811847506f555ce25",
+    "semantic_hash": ""
+  },
+  "components/UpsellModal.tsx": {
+    "mtime": 1790868179.338515,
+    "ast_hash": "83889a97ad91f1c1e9ef8d08371797ff",
+    "semantic_hash": ""
+  },
+  "components/VehicleProfileManager.tsx": {
+    "mtime": 1790868179.338515,
+    "ast_hash": "8d765c01f1ff08f50010b3c59578a7f3",
+    "semantic_hash": ""
+  },
+  "lib/api.ts": {
+    "mtime": 1792018149.3208587,
+    "ast_hash": "bebde02806acffbde422128c71b18ebe",
+    "semantic_hash": ""
+  },
+  "lib/auth.tsx": {
+    "mtime": 1790868143.2147756,
+    "ast_hash": "62f9d43e96e86ab1dae8c214563f72b4",
+    "semantic_hash": ""
+  },
+  "lib/pluscode.ts": {
+    "mtime": 1790873673.1538148,
+    "ast_hash": "ffd840b06cb0a4cbfb6db69a47b8158a",
+    "semantic_hash": ""
+  },
+  "next-env.d.ts": {
+    "mtime": 1790871672.0239692,
+    "ast_hash": "a64595e6014adce3002d3bf762d2dbeb",
+    "semantic_hash": ""
+  },
+  "next.config.js": {
+    "mtime": 1792098379.1846163,
+    "ast_hash": "ee0dbfc927fcec46a2dd06ac7776983c",
+    "semantic_hash": ""
+  },
+  "package.json": {
+    "mtime": 1792056924.9063013,
+    "ast_hash": "ee944fcfc465027f2cfb6dd1943b51b4",
+    "semantic_hash": ""
+  },
+  "postcss.config.js": {
+    "mtime": 1790868081.3457384,
+    "ast_hash": "8640f9b2e6475cc3f5b1ff4548925765",
+    "semantic_hash": ""
+  },
+  "public/manifest.json": {
+    "mtime": 1790868126.7461965,
+    "ast_hash": "c4891529a8008d8a592ae048fc32b877",
+    "semantic_hash": ""
+  },
+  "public/sw.js": {
+    "mtime": 1792080969.2415907,
+    "ast_hash": "9e60b9e249878b716c221f7920d0e55c",
+    "semantic_hash": ""
+  },
+  "shared/types.ts": {
+    "mtime": 1790873498.8525808,
+    "ast_hash": "942d8b605e5e244bf19c5c03fd5024bd",
+    "semantic_hash": ""
+  },
+  "tailwind.config.ts": {
+    "mtime": 1790868081.3457384,
+    "ast_hash": "725299ea7f09809840320233cb8a7b00",
+    "semantic_hash": ""
+  },
+  "tsconfig.json": {
+    "mtime": 1790868305.9718225,
+    "ast_hash": "4382c53b6f3c7effabb20f6a187a03ce",
+    "semantic_hash": ""
+  },
+  "types/open-location-code.d.ts": {
+    "mtime": 1790873673.1532695,
+    "ast_hash": "ea4320a930847e18d02337c0e1d67b5a",
+    "semantic_hash": ""
+  },
+  "worker/migrations/0001_init.sql": {
+    "mtime": 1790868081.402289,
+    "ast_hash": "7899c56264b587209f8a63d4e200441d",
+    "semantic_hash": ""
+  },
+  "worker/src/index.ts": {
+    "mtime": 1790874960.4278433,
+    "ast_hash": "72eac20818b3f53db20b9a92134a3ce2",
+    "semantic_hash": ""
+  },
+  "worker/tsconfig.json": {
+    "mtime": 1790868081.3457384,
+    "ast_hash": "9a7ce3366666654233d5e243e34adb97",
+    "semantic_hash": ""
+  },
+  "public/icon.svg": {
+    "mtime": 1790868126.7582593,
+    "ast_hash": "09b3e88feadb39543cbbf64bd36d76c1",
+    "semantic_hash": ""
+  }
+}

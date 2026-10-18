@@ -1,0 +1,19 @@
+{
+  "0": "types.ts",
+  "1": "index.ts",
+  "2": "scripts",
+  "3": "compilerOptions",
+  "4": "devDependencies",
+  "5": "compilerOptions",
+  "6": "manifest.json",
+  "7": "OpenLocationCode",
+  "8": "layout.tsx",
+  "9": "SolidMap.tsx",
+  "10": "0001_init.sql",
+  "11": "sw.js",
+  "12": "UpsellModal.tsx",
+  "13": "next.config.js",
+  "14": "next-env.d.ts",
+  "15": "tailwind.config.ts",
+  "16": "postcss.config.js"
+}

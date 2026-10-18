@@ -1,0 +1,15 @@
+name = "solidmaps-api"
+main = "worker/src/index.ts"
+compatibility_date = "2025-01-01"
+account_id = "42f7ec46d661bea874dc69495840c7c3"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "solidmaps-db"
+database_id = "67bac20d-ba2c-4dff-ac47-a707ad4f04ed"
+migrations_dir = "worker/migrations"
+
+[vars]
+ALLOWED_ORIGIN = "*"
+ROUTING_ENGINE_URL = "https://router.project-osrm.org"
+PMTILES_URL = "https://build.protomaps.com/20260519.pmtiles"
