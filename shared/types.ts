@@ -46,6 +46,10 @@ export interface RouteGeometry {
 export interface RouteStep {
   instruction: string;
   distance_meters: number;
+  /** Maneuver point as [lon, lat], when the engine provides it. */
+  location?: [number, number];
+  /** Cumulative metres from route origin to this step's maneuver point. */
+  distance_from_start?: number;
 }
 
 export interface RouteResponse {

@@ -22,9 +22,10 @@ interface RoutePlannerProps {
   onRoute: (route: RouteResponse) => void;
   parkingZones: ParkingZone[];
   onParkingZones: (zones: ParkingZone[]) => void;
+  onPlanned?: (plan: { origin: LatLon; destination: LatLon; mode: Mode; vehicle_id?: string }) => void;
 }
 
-export default function RoutePlanner({ onRoute, parkingZones, onParkingZones }: RoutePlannerProps) {
+export default function RoutePlanner({ onRoute, parkingZones, onParkingZones, onPlanned }: RoutePlannerProps) {
   const { user } = useAuth();
   const isPro = user?.subscription_tier === 'pro';
   const [originText, setOriginText] = useState('');
@@ -103,6 +104,12 @@ export default function RoutePlanner({ onRoute, parkingZones, onParkingZones }: 
         });
         setResolved({ origin, destination });
         setDestinationCode(encodePlusCode(destination.lat, destination.lon));
+        onPlanned?.({
+          origin,
+          destination,
+          mode,
+          vehicle_id: isPro && vehicleId ? vehicleId : undefined,
+        });
         onParkingZones([]);
         onRoute(route);
         if (proParking) {
@@ -115,7 +122,7 @@ export default function RoutePlanner({ onRoute, parkingZones, onParkingZones }: 
         setLoading(false);
       }
     },
-    [originText, destinationText, mode, proParking, isPro, vehicleId, resolve, resolved, onRoute, onParkingZones],
+    [originText, destinationText, mode, proParking, isPro, vehicleId, resolve, resolved, onRoute, onParkingZones, onPlanned],
   );
 
   return (

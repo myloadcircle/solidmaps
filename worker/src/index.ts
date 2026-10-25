@@ -321,12 +321,18 @@ function osrmInstruction(step: { maneuver: { type: string; modifier?: string; ex
   }
 }
 
+interface OsrmStep {
+  distance: number;
+  name?: string;
+  maneuver: { type: string; modifier?: string; exit?: number; location?: [number, number] };
+}
+
 interface OsrmResponse {
   routes?: {
     distance: number;
     duration: number;
     geometry?: { coordinates: [number, number][] };
-    legs?: { steps?: { distance: number; name?: string; maneuver: { type: string; modifier?: string; exit?: number } }[] }[];
+    legs?: { steps?: OsrmStep[] }[];
   }[];
 }
 
@@ -345,10 +351,20 @@ async function osrmRoute(
   const data = (await res.json()) as OsrmResponse;
   const route = data.routes?.[0];
   if (!route) throw new ApiError(502, 'Routing engine returned no route');
-  const steps: RouteStep[] = (route.legs?.[0]?.steps ?? []).map((s) => ({
-    instruction: osrmInstruction(s),
-    distance_meters: Math.round(s.distance),
-  }));
+  const rawSteps = route.legs?.[0]?.steps ?? [];
+  let travelled = 0;
+  const steps: RouteStep[] = rawSteps.map((s) => {
+    const step: RouteStep = {
+      instruction: osrmInstruction(s),
+      distance_meters: Math.round(s.distance),
+    };
+    if (s.maneuver.location) {
+      step.location = [s.maneuver.location[0], s.maneuver.location[1]];
+      step.distance_from_start = Math.round(travelled);
+    }
+    travelled += s.distance;
+    return step;
+  });
   return {
     provider: 'osrm',
     mode,

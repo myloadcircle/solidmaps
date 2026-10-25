@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { Protocol, PMTiles } from 'pmtiles';
 import type { GeoJSON } from 'geojson';
@@ -11,7 +11,10 @@ import type { ParkingZone, RouteResponse } from '@/shared/types';
 const protocol = new Protocol();
 maplibregl.addProtocol('pmtiles', protocol.tile);
 
-const PMTILES_URL = process.env.NEXT_PUBLIC_PMTILES_URL || 'https://build.protomaps.com/20260519.pmtiles';
+const PMTILES_URL = process.env.NEXT_PUBLIC_PMTILES_URL || '';
+const MAP_STYLE = process.env.NEXT_PUBLIC_MAP_STYLE || '';
+const DEFAULT_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
+
 if (PMTILES_URL) {
   protocol.add(new PMTiles(PMTILES_URL));
 }
@@ -21,9 +24,11 @@ interface SolidMapProps {
   parkingZones?: ParkingZone[];
   initialCenter?: [number, number];
   initialZoom?: number;
+  onMapReady?: (map: maplibregl.Map) => void;
 }
 
-function baseStyle(): maplibregl.StyleSpecification {
+function baseStyle(): string | maplibregl.StyleSpecification {
+  if (MAP_STYLE) return MAP_STYLE;
   if (PMTILES_URL) {
     return {
       version: 8,
@@ -63,20 +68,43 @@ function baseStyle(): maplibregl.StyleSpecification {
           },
         },
       ],
-  } as maplibregl.StyleSpecification;
+    } as maplibregl.StyleSpecification;
   }
-  return {
-    version: 8,
-    sources: {
-      osm: {
-        type: 'raster',
-        tiles: [`${API_BASE}/tiles/{z}/{x}/{y}`],
-        tileSize: 256,
-        attribution: '© OpenStreetMap contributors',
-      },
+  return DEFAULT_STYLE_URL;
+}
+
+/**
+ * Adds a 3D buildings layer on top of any vector style that follows the
+ * OpenMapTiles schema (OpenFreeMap, MapTiler, etc.). Silently skips styles
+ * without a usable building source, such as raster fallbacks.
+ */
+function add3DBuildings(map: maplibregl.Map): void {
+  const style = map.getStyle();
+  const layers = (style.layers ?? []) as maplibregl.LayerSpecification[];
+  if (layers.length === 0 || layers.some((l) => l.id === 'buildings-3d')) return;
+  const sources = style.sources as Record<string, maplibregl.SourceSpecification> | undefined;
+  const vectorEntry = Object.entries(sources ?? {}).find(([, s]) => s?.type === 'vector');
+  if (!vectorEntry) return;
+  const [sourceId] = vectorEntry;
+  const firstSymbol = layers.find((l) => l.type === 'symbol')?.id;
+  const layer: maplibregl.LayerSpecification = {
+    id: 'buildings-3d',
+    type: 'fill-extrusion',
+    source: sourceId,
+    'source-layer': 'building',
+    minzoom: 14,
+    paint: {
+      'fill-extrusion-color': '#9ca3af',
+      'fill-extrusion-height': ['coalesce', ['get', 'render_height'], 8],
+      'fill-extrusion-base': ['coalesce', ['get', 'render_min_height'], 0],
+      'fill-extrusion-opacity': 0.85,
     },
-    layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
   };
+  try {
+    map.addLayer(layer, firstSymbol);
+  } catch {
+    // Style has no OpenMapTiles building layer — skip 3D extrusion.
+  }
 }
 
 export const SolidMap: React.FC<SolidMapProps> = ({
@@ -84,6 +112,7 @@ export const SolidMap: React.FC<SolidMapProps> = ({
   parkingZones = [],
   initialCenter = [-0.1278, 51.5074],
   initialZoom = 11,
+  onMapReady,
 }) => {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<maplibregl.Map | null>(null);
@@ -108,12 +137,28 @@ export const SolidMap: React.FC<SolidMapProps> = ({
         zoom: initialZoom,
         pitch: 45,
         bearing: 0,
+        attributionControl: { compact: true },
       });
     } catch (err) {
       setErrorState(err instanceof Error ? err.message : 'Map failed to initialize');
       return;
     }
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
+    map.addControl(
+      new maplibregl.GeolocateControl({
+        positionOptions: { enableHighAccuracy: true, maximumAge: 2000 },
+        trackUserLocation: true,
+      }),
+      'top-right',
+    );
+    map.on('style.load', () => {
+      try {
+        map.setProjection({ type: 'globe' });
+      } catch {
+        // Projection control unavailable in this engine build — stay on mercator.
+      }
+      add3DBuildings(map);
+    });
     map.on('load', () => {
       loadedRef.current = true;
       setMapLoaded(true);
@@ -126,12 +171,14 @@ export const SolidMap: React.FC<SolidMapProps> = ({
         id: 'route-casing',
         type: 'line',
         source: 'route',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-color': '#0c4a6e', 'line-width': 9, 'line-opacity': 0.6 },
       });
       map.addLayer({
         id: 'route-line',
         type: 'line',
         source: 'route',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: { 'line-color': '#38bdf8', 'line-width': 5 },
       });
       drawRoute(map, routeRef.current);
@@ -144,6 +191,7 @@ export const SolidMap: React.FC<SolidMapProps> = ({
       }
     });
     mapInstanceRef.current = map;
+    onMapReady?.(map);
     if (process.env.NODE_ENV !== 'production') {
       (window as unknown as { __solidmapsMap?: maplibregl.Map }).__solidmapsMap = map;
     }
@@ -189,7 +237,7 @@ export const SolidMap: React.FC<SolidMapProps> = ({
         </div>
       )}
 
-      <div className="absolute bottom-4 left-4 z-10 flex items-center space-x-2 rounded-md border border-gray-800 bg-gray-900/90 px-3 py-1.5 font-mono text-xs text-gray-400 shadow-lg">
+      <div className="absolute bottom-4 left-4 z-10 hidden items-center space-x-2 rounded-md border border-gray-800 bg-gray-900/90 px-3 py-1.5 font-mono text-xs text-gray-400 shadow-lg md:flex">
         <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
         <span>solidmaps.app // edge-native</span>
       </div>
