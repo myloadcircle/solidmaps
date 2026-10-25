@@ -1,9 +1,19 @@
 # solidmaps — product status
 
+## Production-readiness round (2026-10-25, deployed + verified)
+- **CORS**: `*` → allowlist (prod, `*.solidmaps.pages.dev` previews, localhost) applied at the fetch boundary. Verified: evil origin gets no ACAO header, prod/preview/local echo correctly.
+- **KV cache namespace** `CACHE` (00d89c7e…): geocode 24 h, route 5 min, parking 24 h per ~110 m cell. Hit headers verified via raw response dump. ★ ROOT CAUSE NOTE: fire-and-forget `void CACHE.put(...)` is cancelled when the request ends — all background puts MUST go through `ctx.waitUntil()` (this silently killed every cache write for a whole deploy).
+- **Rate limit**: 30 geocodes/min per IP in KV — verified live (burst of 35 → 5× 429).
+- **Pro Parking is real now**: live OSM data via Nominatim bounded search (viewbox + extratags). Leeds 16 zones, Edinburgh 17, Camden 18 (e.g. "Leeds Station Car Park, 130 m, paid, multi-storey"). Overpass was tried and dropped: 406 for default curl UAs, 9 s hangs from Cloudflare egress, kumi mirror 502 — Nominatim is the same OSM data and already a dependency. The 4-row D1 seed is now only a fallback.
+- **Legal**: `/privacy` + `/terms` live (Loadcircle Ltd, England and Wales), footer links, SW bumped to v3.
+- **Honesty fixes**: upsell copy no longer promises enforced height/weight avoidance; pinch zoom re-enabled (was `userScalable:false`).
+- **Verified clean**: AUTH_SECRET set in prod; no secret files tracked in git; D1 migrations applied; 22-check endpoint QA suite green (validation, auth 401s, truck gating 403, tiles, 404s, OPTIONS 204).
+- **NOT verified**: actual WebGL render in a real browser (IAB webview unavailable in session). Render *inputs* verified instead: OpenFreeMap style 200 (111 layers) + London z10 vector tile 200 (MVT, 222 KB).
+
 ## Deployment state (2026-10-25)
-- **Worker**: `https://solidmaps-api.fbirele.workers.dev` — live, step locations verified (version `a08c8c21`)
-- **Frontend production**: `https://solidmaps.pages.dev` — live with parity round 1 (verified: new page chunk `page-53c10ea3…`, OpenFreeMap chunk `34.a53a9da9…`). Deployed via `npx wrangler pages deploy out --project-name=solidmaps --branch=main` — **the production branch is `main`, NOT `master`** (master → preview only). Push-to-build does NOT auto-deploy; direct-upload `out/` after a local `next build` is the shipping path.
-- **Custom domain `solidmaps.app`**: NOT REGISTERED (NXDOMAIN via 1.1.1.1). Blocked on owner purchase (~£15/yr). Once registered + zone added to Cloudflare: Pages → solidmaps → Custom domains → `solidmaps.app`, done (Pages auto-issues the cert).
+- **Worker**: `https://solidmaps-api.fbirele.workers.dev` — version `45871b5e`
+- **Frontend production**: `https://solidmaps.pages.dev` — deploy via local `next build` + `npx wrangler pages deploy out --project-name=solidmaps --branch=main` (production branch is `main`, NOT `master`; git push does NOT auto-deploy)
+- **Custom domain `solidmaps.app`**: NOT REGISTERED (NXDOMAIN via 1.1.1.1). Blocked on owner purchase (~£15/yr), then Pages → Custom domains → attach.
 
 ## Mapbox parity round 1 (2026-10-25, shipped)
 - **Engine**: maplibre-gl 4.7.1 → **6.16.0** (globe projection on style load, cooperative gesture set, WebGL2 paths)
