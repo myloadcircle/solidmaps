@@ -17,10 +17,14 @@ export default function UpsellModal({ feature, onClose }: UpsellModalProps) {
         <h2 className="text-xl font-bold">Go Pro</h2>
         <p className="mt-2 text-sm text-slate-300">{feature}</p>
         <ul className="mt-3 space-y-1 text-sm text-slate-300">
-          <li>· Truck routing: bridge heights and weight limits</li>
-          <li>· Parking compliance: never get a ticket</li>
-          <li>· ULEZ / LEZ warnings across the UK and EU</li>
+          <li>· Truck routing with bridge-height and weight-limit warnings</li>
+          <li>· Live parking data around your destination (OpenStreetMap)</li>
+          <li>· ULEZ / LEZ compliance warnings across the UK</li>
         </ul>
+        <p className="mt-3 text-xs text-slate-500">
+          Height and weight limits are flagged as warnings; routes avoid them only where the
+          underlying OpenStreetMap data supports it.
+        </p>
         {upgradeUrl ? (
           <a
             href={upgradeUrl}

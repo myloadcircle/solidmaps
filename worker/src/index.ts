@@ -16,6 +16,7 @@ import type {
 
 export interface Env {
   DB: D1Database;
+  CACHE?: KVNamespace;
   AUTH_SECRET?: string;
   ROUTING_ENGINE_URL?: string;
   ROUTING_ENGINE_TYPE?: string;
@@ -28,6 +29,35 @@ const VEHICLE_TYPES: VehicleType[] = ['car', 'van', 'hgv', 'motorcycle'];
 const FUEL_TYPES: FuelType[] = ['petrol', 'diesel', 'electric', 'hybrid', 'hydrogen', 'other'];
 const USER_AGENT = 'solidmaps-api/1.0 (https://solidmaps.app)';
 
+const ALLOWED_ORIGINS: string[] = [
+  'https://solidmaps.pages.dev',
+  'https://solidmaps-api.fbirele.workers.dev',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+];
+
+function allowedOrigin(request: Request, env: Env): string | null {
+  const origin = request.headers.get('Origin');
+  if (!origin) return null;
+  // Explicit override (kept for staging/preview hosts) or the fixed allowlist.
+  if (env.ALLOWED_ORIGIN && env.ALLOWED_ORIGIN !== '*' && origin === env.ALLOWED_ORIGIN) return origin;
+  if (ALLOWED_ORIGINS.includes(origin)) return origin;
+  // Per-deployment preview hosts: <hash>.solidmaps.pages.dev / <branch>.solidmaps.pages.dev
+  if (/^https:\/\/[a-z0-9-]+\.solidmaps\.pages\.dev$/.test(origin)) return origin;
+  return null;
+}
+
+function corsHeaders(request: Request, env: Env): HeadersInit {
+  const origin = allowedOrigin(request, env);
+  if (!origin) return {};
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    Vary: 'Origin',
+  };
+}
+
 class ApiError extends Error {
   constructor(
     public status: number,
@@ -37,24 +67,16 @@ class ApiError extends Error {
   }
 }
 
-function corsHeaders(env: Env): HeadersInit {
-  const origin = env.ALLOWED_ORIGIN ?? '*';
-  return {
-    'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-  };
-}
-
-function json(data: unknown, status = 200, env?: Env): Response {
+function json(data: unknown, status = 200, _env?: Env): Response {
+  // CORS headers are applied once at the fetch() boundary.
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json', ...(env ? corsHeaders(env) : {}) },
+    headers: { 'Content-Type': 'application/json' },
   });
 }
 
-function fail(message: string, status: number, env: Env): Response {
-  return json({ error: message }, status, env);
+function fail(message: string, status: number, _env?: Env): Response {
+  return json({ error: message }, status);
 }
 
 function b64url(input: ArrayBuffer | Uint8Array): string {
@@ -152,20 +174,46 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
   return json(payload, 200, env);
 }
 
-async function handleGeocode(url: URL, env: Env): Promise<Response> {
+/** Cross-isolate fixed-window limiter in KV: 30 geocodes/min per client IP. */
+async function geocodeAllowed(env: Env, ip: string): Promise<boolean> {
+  if (!env.CACHE) return true;
+  const key = `rl:${ip}`;
+  const count = parseInt((await env.CACHE.get(key)) ?? '0', 10);
+  if (count >= 30) return false;
+  await env.CACHE.put(key, String(count + 1), { expirationTtl: 60 });
+  return true;
+}
+
+async function handleGeocode(request: Request, url: URL, env: Env, ctx: ExecutionContext): Promise<Response> {
   const q = url.searchParams.get('q') ?? '';
   if (q.trim().length < 2) return fail('Missing query parameter "q"', 400, env);
+  const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+  if (!(await geocodeAllowed(env, ip))) {
+    return fail('Too many searches — slow down and retry shortly', 429, env);
+  }
+  const normalized = q.trim().toLowerCase().replace(/\s+/g, ' ');
+  if (env.CACHE) {
+    const cached = await env.CACHE.get(`geo:${normalized}`);
+    if (cached) {
+      return new Response(cached, {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', 'X-Solidmaps-Cache': 'hit' },
+      });
+    }
+  }
   const res = await fetch(
-    `https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(q)}`,
+    `https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(normalized)}`,
     { headers: { 'User-Agent': USER_AGENT } },
   );
   if (!res.ok) return fail('Geocoding provider error', 502, env);
   const data = (await res.json()) as { place_id: number; display_name: string; lat: string; lon: string }[];
-  return json(
+  const payload = JSON.stringify(
     data.map((d) => ({ id: String(d.place_id), text: d.display_name, lat: parseFloat(d.lat), lon: parseFloat(d.lon) })),
-    200,
-    env,
   );
+  if (env.CACHE) {
+    ctx.waitUntil(env.CACHE.put(`geo:${normalized}`, payload, { expirationTtl: 86400 }).catch(() => {}));
+  }
+  return new Response(payload, { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
 
 function validLatLon(p: LatLon | undefined | null): p is LatLon {
@@ -459,7 +507,7 @@ async function routeWithEngine(
   }
 }
 
-async function handleRoute(request: Request, env: Env): Promise<Response> {
+async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const body = (await request.json().catch(() => null)) as RouteRequest | null;
   if (!body || !validLatLon(body.origin) || !validLatLon(body.destination) || !MODES.includes(body.mode)) {
     return fail('Invalid request: origin, destination and a valid mode are required', 400, env);
@@ -481,7 +529,23 @@ async function handleRoute(request: Request, env: Env): Promise<Response> {
     profile = normalizeProfile(row);
   }
 
-  return json(await routeWithEngine(origin, destination, mode, profile, env), 200, env);
+  // Short-lived KV cache (5 min) to spare the public routing demo servers.
+  const r4 = (n: number) => n.toFixed(4);
+  const routeKey = `route:${r4(origin.lat)},${r4(origin.lon)};${r4(destination.lat)},${r4(destination.lon)};${mode};${body.vehicle_id ?? 'anon'}`;
+  if (env.CACHE) {
+    const cached = await env.CACHE.get(routeKey);
+    if (cached) {
+      return new Response(cached, {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', 'X-Solidmaps-Cache': 'hit' },
+      });
+    }
+  }
+  const result = await routeWithEngine(origin, destination, mode, profile, env);
+  if (env.CACHE) {
+    ctx.waitUntil(env.CACHE.put(routeKey, JSON.stringify(result), { expirationTtl: 300 }).catch(() => {}));
+  }
+  return json(result, 200, env);
 }
 
 type VehicleProfileRow = Omit<VehicleProfile, 'id' | 'user_id'> & { id: string; user_id: string; created_at?: number };
@@ -511,35 +575,135 @@ interface ParkingZoneRow {
   restrictions: string;
 }
 
-async function handleParking(url: URL, env: Env): Promise<Response> {
+interface NominatimParkingResult {
+  place_id: number;
+  lat: string;
+  lon: string;
+  category?: string;
+  type?: string;
+  name?: string;
+  extratags?: Record<string, string>;
+}
+
+function parseMaxstayMinutes(v: string | undefined): number | null {
+  if (!v) return null;
+  const hours = /(\d+(?:\.\d+)?)\s*hour/.exec(v);
+  if (hours) return Math.round(parseFloat(hours[1]) * 60);
+  const mins = /(\d+)\s*min/.exec(v);
+  if (mins) return parseInt(mins[1], 10);
+  return null;
+}
+
+function nominatimToZones(results: NominatimParkingResult[], point: LatLon): ParkingZone[] {
+  return results
+    .filter((r) => r.category === 'amenity' && (r.type ?? '').startsWith('parking'))
+    .map((r) => {
+      const lat = parseFloat(r.lat);
+      const lon = parseFloat(r.lon);
+      const tags = r.extratags ?? {};
+      const restrictions: string[] = [];
+      if (tags.access && tags.access !== 'yes') restrictions.push(`Access: ${tags.access}`);
+      if (tags.maxstay) restrictions.push(`Max stay: ${tags.maxstay}`);
+      if (tags.fee === 'yes') restrictions.push('Paid parking');
+      if (tags.charge) restrictions.push(`Charge: ${tags.charge}`);
+      if (tags.parking) restrictions.push(`Type: ${tags.parking.replace(/_/g, ' ')}`);
+      const zone: ParkingZone = {
+        id: `nominatim/${r.place_id}`,
+        name: r.name?.trim() || 'Parking',
+        lat,
+        lon,
+        radius_m: 100,
+        max_stay_minutes: parseMaxstayMinutes(tags.maxstay),
+        paid: tags.fee === 'yes',
+        rate_per_hour: null,
+        restrictions: restrictions.length > 0 ? restrictions : ['Data from OpenStreetMap'],
+        distance_m: Math.round(haversineM(point, { lat, lon })),
+      };
+      return zone;
+    })
+    .filter((z) => z.distance_m <= 500)
+    .sort((a, b) => a.distance_m - b.distance_m)
+    .slice(0, 20);
+}
+
+/**
+ * Live parking via Nominatim bounded search (same OSM data as Overpass, but a
+ * provider we already depend on and can actually reach from Workers egress).
+ */
+async function fetchParkingFromOsm(point: LatLon): Promise<ParkingZone[] | null> {
+  const dLon = 0.006;
+  const dLat = 0.0045;
+  const viewbox = `${(point.lon - dLon).toFixed(5)},${(point.lat + dLat).toFixed(5)},${(point.lon + dLon).toFixed(5)},${(point.lat - dLat).toFixed(5)}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 6000);
+  try {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=20&extratags=1&bounded=1&viewbox=${viewbox}&q=parking`,
+      { headers: { 'User-Agent': USER_AGENT }, signal: controller.signal },
+    );
+    if (!res.ok) return null;
+    const data = (await res.json()) as NominatimParkingResult[];
+    return nominatimToZones(data, point);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function handleParking(url: URL, env: Env, ctx: ExecutionContext): Promise<Response> {
   const lat = parseFloat(url.searchParams.get('lat') ?? '');
   const lon = parseFloat(url.searchParams.get('lon') ?? '');
   if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) {
     return fail('Invalid coordinates', 400, env);
   }
-  const rows = await env.DB.prepare('SELECT * FROM parking_zones').all<ParkingZoneRow>();
   const point: LatLon = { lat, lon };
-  const zones: ParkingZone[] = rows.results
-    .map((z) => {
-      let restrictions: string[] = [];
+
+  // Live OSM parking data, cached 24 h per ~110 m cell.
+  const cellKey = `park:${lat.toFixed(3)},${lon.toFixed(3)}`;
+  let zones: ParkingZone[] | null = null;
+  if (env.CACHE) {
+    const cached = await env.CACHE.get(cellKey);
+    if (cached) {
       try {
-        restrictions = JSON.parse(z.restrictions) as string[];
+        zones = JSON.parse(cached) as ParkingZone[];
+        for (const z of zones) z.distance_m = Math.round(haversineM(point, { lat: z.lat, lon: z.lon }));
+        zones = zones.filter((z) => z.distance_m <= 500).sort((a, b) => a.distance_m - b.distance_m);
       } catch {}
-      return {
-        id: z.id,
-        name: z.name,
-        lat: z.lat,
-        lon: z.lon,
-        radius_m: z.radius_m,
-        max_stay_minutes: z.max_stay_minutes,
-        paid: !!z.paid,
-        rate_per_hour: z.rate_per_hour,
-        restrictions,
-        distance_m: Math.round(haversineM(point, { lat: z.lat, lon: z.lon })),
-      };
-    })
-    .filter((z) => z.distance_m <= 500)
-    .sort((a, b) => a.distance_m - b.distance_m);
+    }
+  }
+  if (!zones) {
+    zones = await fetchParkingFromOsm(point);
+    if (zones && env.CACHE) {
+      ctx.waitUntil(env.CACHE.put(cellKey, JSON.stringify(zones), { expirationTtl: 86400 }).catch(() => {}));
+    }
+  }
+
+  // Fallback: curated D1 zones (historical seed data) when Overpass is unavailable.
+  if (!zones) {
+    const rows = await env.DB.prepare('SELECT * FROM parking_zones').all<ParkingZoneRow>();
+    zones = rows.results
+      .map((z) => {
+        let restrictions: string[] = [];
+        try {
+          restrictions = JSON.parse(z.restrictions) as string[];
+        } catch {}
+        return {
+          id: z.id,
+          name: z.name,
+          lat: z.lat,
+          lon: z.lon,
+          radius_m: z.radius_m,
+          max_stay_minutes: z.max_stay_minutes,
+          paid: !!z.paid,
+          rate_per_hour: z.rate_per_hour,
+          restrictions,
+          distance_m: Math.round(haversineM(point, { lat: z.lat, lon: z.lon })),
+        } satisfies ParkingZone;
+      })
+      .filter((z) => z.distance_m <= 500)
+      .sort((a, b) => a.distance_m - b.distance_m);
+  }
   let availability: unknown = null;
   if (env.PARKING_API_URL) {
     try {
@@ -626,35 +790,50 @@ async function handleTiles(url: URL, env: Env, ctx: ExecutionContext): Promise<R
     headers: {
       'Content-Type': 'image/png',
       'Cache-Control': 'public, max-age=2592000',
-      'Access-Control-Allow-Origin': env.ALLOWED_ORIGIN ?? '*',
     },
   });
   ctx.waitUntil(cache.put(cacheKey, response.clone()));
   return response;
 }
 
+function withCors(response: Response, request: Request, env: Env): Response {
+  const headers = new Headers(response.headers);
+  const origin = allowedOrigin(request, env);
+  if (origin) {
+    headers.set('Access-Control-Allow-Origin', origin);
+    headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    headers.set('Vary', 'Origin');
+  } else {
+    headers.delete('Access-Control-Allow-Origin');
+  }
+  return new Response(response.body, { status: response.status, headers });
+}
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     if (request.method === 'OPTIONS') {
-      return new Response(null, { status: 204, headers: corsHeaders(env) });
+      return withCors(new Response(null, { status: 204 }), request, env);
     }
     const url = new URL(request.url);
     const seg = url.pathname.split('/').filter(Boolean);
     try {
-      if (seg[0] !== 'api') return new Response('Not found', { status: 404 });
-      if (seg[1] === 'auth' && seg[2] === 'issue' && request.method === 'POST') return await handleIssue(request, env);
-      if (seg[1] === 'auth' && seg[2] === 'me' && request.method === 'GET') return await handleMe(request, env);
-      if (seg[1] === 'geocode' && request.method === 'GET') return await handleGeocode(url, env);
-      if (seg[1] === 'route' && request.method === 'POST') return await handleRoute(request, env);
-      if (seg[1] === 'parking' && request.method === 'GET') return await handleParking(url, env);
-      if (seg[1] === 'vehicle-profile' && request.method === 'GET') return await handleVehicleProfileList(request, env);
-      if (seg[1] === 'vehicle-profile' && request.method === 'POST') return await handleVehicleProfileCreate(request, env);
-      if (seg[1] === 'tiles' && request.method === 'GET') return await handleTiles(url, env, ctx);
-      return fail('Not found', 404, env);
+      let inner: Response;
+      if (seg[0] !== 'api') inner = new Response('Not found', { status: 404 });
+      else if (seg[1] === 'auth' && seg[2] === 'issue' && request.method === 'POST') inner = await handleIssue(request, env);
+      else if (seg[1] === 'auth' && seg[2] === 'me' && request.method === 'GET') inner = await handleMe(request, env);
+      else if (seg[1] === 'geocode' && request.method === 'GET') inner = await handleGeocode(request, url, env, ctx);
+      else if (seg[1] === 'route' && request.method === 'POST') inner = await handleRoute(request, env, ctx);
+      else if (seg[1] === 'parking' && request.method === 'GET') inner = await handleParking(url, env, ctx);
+      else if (seg[1] === 'vehicle-profile' && request.method === 'GET') inner = await handleVehicleProfileList(request, env);
+      else if (seg[1] === 'vehicle-profile' && request.method === 'POST') inner = await handleVehicleProfileCreate(request, env);
+      else if (seg[1] === 'tiles' && request.method === 'GET') inner = await handleTiles(url, env, ctx);
+      else inner = fail('Not found', 404, env);
+      return withCors(inner, request, env);
     } catch (err) {
-      if (err instanceof ApiError) return fail(err.message, err.status, env);
+      if (err instanceof ApiError) return withCors(fail(err.message, err.status, env), request, env);
       console.error('solidmaps-api error', err);
-      return fail('Internal server error', 500, env);
+      return withCors(fail('Internal server error', 500, env), request, env);
     }
   },
 };

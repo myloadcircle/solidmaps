@@ -121,6 +121,11 @@ export default function Home() {
         onParkingZones={setParkingZones}
         onPlanned={handlePlanned}
       />
+      <div className="absolute bottom-4 right-4 z-10 flex items-center gap-3 rounded-md border border-gray-800 bg-gray-900/90 px-3 py-1.5 font-mono text-xs text-gray-400 shadow-lg">
+        <a href="/privacy.html" className="hover:text-slate-200">Privacy</a>
+        <span aria-hidden="true">·</span>
+        <a href="/terms.html" className="hover:text-slate-200">Terms</a>
+      </div>
     </main>
   );
 }
