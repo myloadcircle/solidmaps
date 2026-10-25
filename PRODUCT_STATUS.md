@@ -1,5 +1,10 @@
 # solidmaps — product status
 
+## Deployment state (2026-10-25)
+- **Worker**: `https://solidmaps-api.fbirele.workers.dev` — live, step locations verified (version `a08c8c21`)
+- **Frontend production**: `https://solidmaps.pages.dev` — live with parity round 1 (verified: new page chunk `page-53c10ea3…`, OpenFreeMap chunk `34.a53a9da9…`). Deployed via `npx wrangler pages deploy out --project-name=solidmaps --branch=main` — **the production branch is `main`, NOT `master`** (master → preview only). Push-to-build does NOT auto-deploy; direct-upload `out/` after a local `next build` is the shipping path.
+- **Custom domain `solidmaps.app`**: NOT REGISTERED (NXDOMAIN via 1.1.1.1). Blocked on owner purchase (~£15/yr). Once registered + zone added to Cloudflare: Pages → solidmaps → Custom domains → `solidmaps.app`, done (Pages auto-issues the cert).
+
 ## Mapbox parity round 1 (2026-10-25, shipped)
 - **Engine**: maplibre-gl 4.7.1 → **6.16.0** (globe projection on style load, cooperative gesture set, WebGL2 paths)
 - **Style**: default is now **OpenFreeMap Liberty** (`https://tiles.openfreemap.org/styles/liberty`) — keyless, worldwide vector tiles, POIs + labels; 3D buildings auto-added (`buildings-3d` fill-extrusion, OpenMapTiles `render_height`, z14+) on any vector style. PMTiles branch kept: set `NEXT_PUBLIC_PMTILES_URL` to force sovereign Protomaps mode; `NEXT_PUBLIC_MAP_STYLE` overrides with any style URL.
