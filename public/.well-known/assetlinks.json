@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "uk.co.loadcircle.solidmaps",
+      "sha256_cert_fingerprints": [
+        "75:93:FC:6D:5F:A3:68:4D:C0:6B:4F:D5:C7:BB:73:CC:8A:B3:96:F3:53:97:90:1C:8B:48:34:C0:5C:7B:6B:57"
+      ]
+    }
+  }
+]

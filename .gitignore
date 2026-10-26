@@ -6,3 +6,8 @@ out/
 .dev.vars
 dist/
 *.tsbuildinfo
+play/twa/.gradle/
+play/twa/app/build/
+play/twa/.idea/
+play/twa/local.properties
+play/twa/gradle-build.log

@@ -1,0 +1,46 @@
+plugins { id 'com.android.application' }
+
+// Signing material is passed at build time from the estate vault, never committed:
+// gradle -PandroidStoreFile=C:/DEV/secrets/loadcircle-upload.jks -PandroidStorePassword=... assembleRelease
+android {
+    namespace 'uk.co.loadcircle.solidmaps'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'uk.co.loadcircle.solidmaps'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    signingConfigs {
+        release {
+            if (project.hasProperty('androidStoreFile')) {
+                storeFile file(project.property('androidStoreFile'))
+                storePassword project.property('androidStorePassword')
+                keyAlias 'loadcircle'
+                keyPassword project.property('androidStorePassword')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            signingConfig signingConfigs.release
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.22'
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'
+    implementation 'com.google.androidbrowserhelper:androidbrowserhelper:2.5.0'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+}

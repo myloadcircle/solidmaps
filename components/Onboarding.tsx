@@ -92,7 +92,7 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') finish();
+      if (e.key === 'Escape') finish(); if (e.key === 'Enter') finish();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -157,7 +157,7 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
       >
         {slide === SLIDES.length - 1 ? 'Start exploring' : 'Continue'}
       </button>
-      <p className="mt-3 text-[11px] text-slate-600">Esc to skip · installable to your home screen</p>
+      <p className="mt-3 text-[11px] text-slate-600">Skippable anytime · installable to your home screen</p>
     </div>
   );
 }
