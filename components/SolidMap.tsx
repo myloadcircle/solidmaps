@@ -73,11 +73,50 @@ function baseStyle(): string | maplibregl.StyleSpecification {
   return DEFAULT_STYLE_URL;
 }
 
-/**
- * Adds a 3D buildings layer on top of any vector style that follows the
- * OpenMapTiles schema (OpenFreeMap, MapTiler, etc.). Silently skips styles
- * without a usable building source, such as raster fallbacks.
- */
+function rasterStyle(): maplibregl.StyleSpecification {
+  return {
+    version: 8,
+    sources: {
+      osm: {
+        type: 'raster',
+        tiles: [`${API_BASE}/tiles/{z}/{x}/{y}`],
+        tileSize: 256,
+        attribution: '© OpenStreetMap contributors',
+      },
+    },
+    layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
+  };
+}
+
+function webgl2Supported(): boolean {
+  try {
+    return !!document.createElement('canvas').getContext('webgl2');
+  } catch {
+    return false;
+  }
+}
+
+function setupRouteLayers(map: maplibregl.Map): void {
+  if (map.getSource('route')) return;
+  map.addSource('route', {
+    type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] } as GeoJSON,
+  });
+  map.addLayer({
+    id: 'route-casing',
+    type: 'line',
+    source: 'route',
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#0c4a6e', 'line-width': 9, 'line-opacity': 0.6 },
+  });
+  map.addLayer({
+    id: 'route-line',
+    type: 'line',
+    source: 'route',
+    layout: { 'line-cap': 'round', 'line-join': 'round' },
+    paint: { 'line-color': '#38bdf8', 'line-width': 5 },
+  });
+}
 function add3DBuildings(map: maplibregl.Map): void {
   const style = map.getStyle();
   const layers = (style.layers ?? []) as maplibregl.LayerSpecification[];
@@ -118,15 +157,34 @@ export const SolidMap: React.FC<SolidMapProps> = ({
   const mapInstanceRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<maplibregl.Marker[]>([]);
   const loadedRef = useRef(false);
+  const fallbackTriedRef = useRef(false);
   const routeRef = useRef(route);
   const parkingRef = useRef(parkingZones);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [errorState, setErrorState] = useState<string | null>(null);
+  const [fatalWebgl, setFatalWebgl] = useState(false);
+  const [errorDismissed, setErrorDismissed] = useState(false);
+  const [mapKey, setMapKey] = useState(0);
   routeRef.current = route;
   parkingRef.current = parkingZones;
 
+  const retry = () => {
+    fallbackTriedRef.current = false;
+    setErrorState(null);
+    setErrorDismissed(false);
+    setMapLoaded(false);
+    setMapKey((k) => k + 1);
+  };
+
   useEffect(() => {
     if (!mapContainerRef.current || mapInstanceRef.current) return;
+    if (!webgl2Supported()) {
+      setFatalWebgl(true);
+      setErrorState(
+        'This browser cannot render maps (WebGL2 unavailable). Route planning and directions below still work fully.',
+      );
+      return;
+    }
     mapContainerRef.current.innerHTML = '';
     let map: maplibregl.Map;
     try {
@@ -140,7 +198,9 @@ export const SolidMap: React.FC<SolidMapProps> = ({
         attributionControl: { compact: true },
       });
     } catch (err) {
-      setErrorState(err instanceof Error ? err.message : 'Map failed to initialize');
+      setErrorState(
+        `Map failed to initialize: ${err instanceof Error ? err.message : 'unknown error'}. Route planning still works below.`,
+      );
       return;
     }
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), 'top-right');
@@ -158,37 +218,41 @@ export const SolidMap: React.FC<SolidMapProps> = ({
         // Projection control unavailable in this engine build — stay on mercator.
       }
       add3DBuildings(map);
+      setupRouteLayers(map);
+      drawRoute(map, routeRef.current);
+      drawParking(map, parkingRef.current, markersRef.current);
     });
     map.on('load', () => {
       loadedRef.current = true;
       setMapLoaded(true);
+      setErrorState(null);
       map.resize();
-      map.addSource('route', {
-        type: 'geojson',
-        data: { type: 'FeatureCollection', features: [] } as GeoJSON,
-      });
-      map.addLayer({
-        id: 'route-casing',
-        type: 'line',
-        source: 'route',
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: { 'line-color': '#0c4a6e', 'line-width': 9, 'line-opacity': 0.6 },
-      });
-      map.addLayer({
-        id: 'route-line',
-        type: 'line',
-        source: 'route',
-        layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: { 'line-color': '#38bdf8', 'line-width': 5 },
-      });
+      setupRouteLayers(map);
       drawRoute(map, routeRef.current);
       drawParking(map, parkingRef.current, markersRef.current);
     });
     map.on('error', (e) => {
-      console.warn('MapLibre error:', e.error ?? e);
-      if (!loadedRef.current) {
-        setErrorState('Failed to render map tiles. Check network or archive source.');
+      const detail = e.error instanceof Error ? e.error.message : String(e.error ?? e);
+      console.warn('MapLibre error:', detail);
+      if (loadedRef.current) return;
+      if (!fallbackTriedRef.current) {
+        // Vector tiles unreachable — retry once on the raster fallback before giving up.
+        fallbackTriedRef.current = true;
+        setErrorState('Map tiles are slow or blocked — switching to the fallback map…');
+        try {
+          map.setStyle(rasterStyle());
+          map.once('idle', () => {
+            if (!mapInstanceRef.current) return;
+            loadedRef.current = true;
+            setMapLoaded(true);
+            setErrorState(null);
+          });
+        } catch {
+          setErrorState(`Map failed to render: ${detail}`);
+        }
+        return;
       }
+      setErrorState(`Map failed to render: ${detail}. Tap Retry — routing still works below.`);
     });
     mapInstanceRef.current = map;
     onMapReady?.(map);
@@ -202,9 +266,9 @@ export const SolidMap: React.FC<SolidMapProps> = ({
       mapInstanceRef.current = null;
       loadedRef.current = false;
     };
-    // initialCenter/initialZoom are initial-only; style depends on build-time env
+    // Retry remounts via mapKey; center/zoom are initial-only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [mapKey]);
 
   useEffect(() => {
     const map = mapInstanceRef.current;
@@ -218,22 +282,58 @@ export const SolidMap: React.FC<SolidMapProps> = ({
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-gray-950">
-      <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" aria-label="Map" />
+      {fatalWebgl ? (
+        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,#1e293b_0%,#0f172a_70%)]" aria-hidden="true" />
+      ) : (
+        <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" aria-label="Map" />
+      )}
 
-      {!mapLoaded && !errorState && (
+      {!mapLoaded && !errorState && !fatalWebgl && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-900/80 font-mono text-sm text-white backdrop-blur-sm">
           <div className="flex items-center space-x-3">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
-            <span>Loading Sovereign Map Engine...</span>
+            <span>Loading map…</span>
           </div>
         </div>
       )}
 
-      {errorState && (
-        <div className="absolute left-4 right-4 top-4 z-20 max-w-md rounded-lg border border-red-500 bg-red-950/90 p-4 font-mono text-xs text-red-200 shadow-xl md:left-auto md:right-4">
-          <p className="mb-1 font-bold">Map Rendering Alert</p>
-          <p>{errorState}</p>
-          <p className="mt-2 text-red-400">WebGL (hardware acceleration) must be enabled in this browser.</p>
+      {errorState && !errorDismissed && (
+        <div
+          role="alert"
+          className="absolute left-1/2 top-16 z-40 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 rounded-xl border border-amber-500/50 bg-slate-900/95 p-3.5 text-xs text-amber-200 shadow-xl backdrop-blur"
+        >
+          <div className="flex items-start gap-2">
+            <span aria-hidden="true" className="mt-0.5 text-base leading-none">⚠️</span>
+            <div className="flex-1">
+              <p className="font-semibold text-amber-100">
+                {fatalWebgl ? 'Maps unavailable in this browser' : 'Map issue'}
+              </p>
+              <p className="mt-1 leading-relaxed text-amber-200/90">{errorState}</p>
+              <div className="mt-2.5 flex gap-2">
+                {!fatalWebgl && (
+                  <button
+                    onClick={retry}
+                    className="rounded-lg bg-amber-500/20 px-3 py-1.5 font-semibold text-amber-100 hover:bg-amber-500/30"
+                  >
+                    Retry
+                  </button>
+                )}
+                <button
+                  onClick={() => setErrorDismissed(true)}
+                  className="rounded-lg px-3 py-1.5 text-amber-200/70 hover:bg-amber-500/10"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={() => setErrorDismissed(true)}
+              aria-label="Close"
+              className="rounded p-1 text-amber-200/50 hover:text-amber-100"
+            >
+              ✕
+            </button>
+          </div>
         </div>
       )}
 
