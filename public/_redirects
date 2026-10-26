@@ -1,1 +1,2 @@
+https://www.solidmap.app/* https://solidmap.app/:splat 301
 /api/* https://solidmaps-api.fbirele.workers.dev/api/:splat 200

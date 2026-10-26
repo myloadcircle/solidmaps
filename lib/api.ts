@@ -50,6 +50,8 @@ export const api = {
       body: JSON.stringify({ email }),
     }),
   getUser: () => request<User>('/auth/me'),
+  deleteAccount: () =>
+    request<{ deleted: boolean }>('/auth/account', { method: 'DELETE' }),
   geocode: (q: string) => request<GeocodeResult[]>(`/geocode?q=${encodeURIComponent(q)}`),
   planRoute: (r: RouteRequest) =>
     request<RouteResponse>('/route', { method: 'POST', body: JSON.stringify(r) }),

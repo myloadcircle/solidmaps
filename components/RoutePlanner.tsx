@@ -177,10 +177,15 @@ export default function RoutePlanner({ onRoute, parkingZones, onParkingZones, on
             </select>
           )}
           {error && <p className="text-sm text-rose-400">{error}</p>}
+          {!originText && !destinationText && !loading && (
+            <p className="text-center text-xs text-slate-500">
+              Try <span className="text-slate-300">“Camden Market”</span>, a plus code, or paste lat,lon
+            </p>
+          )}
           <button
             type="submit"
             disabled={loading}
-            className="w-full rounded-xl bg-sky-600 py-2.5 font-bold disabled:opacity-50"
+            className="w-full rounded-xl bg-sky-600 py-2.5 font-bold shadow-lg shadow-sky-600/25 transition-transform active:scale-[0.99] disabled:opacity-50"
           >
             {loading ? 'Planning…' : 'Plan route'}
           </button>

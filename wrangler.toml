@@ -14,6 +14,6 @@ binding = "CACHE"
 id = "00d89c7ebeb64e118749e2522419370a"
 
 [vars]
-ALLOWED_ORIGIN = "https://solidmaps.pages.dev"
+ALLOWED_ORIGIN = "https://solidmap.app"
 ROUTING_ENGINE_URL = "https://router.project-osrm.org"
 PMTILES_URL = "https://build.protomaps.com/20260519.pmtiles"

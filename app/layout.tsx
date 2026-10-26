@@ -5,12 +5,20 @@ import { AuthProvider } from '@/lib/auth';
 import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 
 export const metadata: Metadata = {
-  title: 'solidmaps — drive smarter, park legally',
+  metadataBase: new URL('https://solidmap.app'),
+  title: 'SolidMaps — Drive smarter. Park legally.',
   description:
-    'Unified consumer navigation with Pro truck routing, parking compliance and ULEZ-aware routes.',
+    'Free turn-by-turn navigation with voice guidance, automatic rerouting and live parking intelligence. Truck-aware route warnings for professional drivers.',
   manifest: '/manifest.json',
-  icons: { icon: '/icon.svg' },
-  appleWebApp: { capable: true, title: 'solidmaps', statusBarStyle: 'black-translucent' },
+  icons: { icon: '/icon.svg', apple: '/icon-192.png' },
+  appleWebApp: { capable: true, title: 'SolidMaps', statusBarStyle: 'black-translucent' },
+  openGraph: {
+    title: 'SolidMaps — Drive smarter. Park legally.',
+    description: 'Turn-by-turn navigation, voice guidance and live parking intelligence.',
+    url: 'https://solidmap.app',
+    siteName: 'SolidMaps',
+    type: 'website',
+  },
 };
 
 export const viewport: Viewport = {

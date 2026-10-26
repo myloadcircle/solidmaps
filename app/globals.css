@@ -7,3 +7,56 @@ body {
   height: 100%;
   background: #0f172a;
 }
+
+/* Onboarding motion */
+@keyframes sm-fade-up {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes sm-pop {
+  0% { opacity: 0; transform: scale(0.82); }
+  60% { opacity: 1; transform: scale(1.04); }
+  100% { opacity: 1; transform: scale(1); }
+}
+@keyframes sm-glow {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50% { opacity: 0.9; transform: scale(1.06); }
+}
+.sm-anim-fade-up { animation: sm-fade-up 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.sm-anim-pop { animation: sm-pop 0.45s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.sm-anim-glow { animation: sm-glow 3.2s ease-in-out infinite; }
+.sm-delay-1 { animation-delay: 0.08s; }
+.sm-delay-2 { animation-delay: 0.16s; }
+.sm-delay-3 { animation-delay: 0.24s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .sm-anim-fade-up, .sm-anim-pop, .sm-anim-glow { animation: none; }
+}
+
+/* MapLibre control theming to match the dark shell */
+.maplibregl-ctrl-group {
+  background: rgba(15, 23, 42, 0.92) !important;
+  border: 1px solid rgba(71, 85, 105, 0.6) !important;
+  border-radius: 12px !important;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45) !important;
+}
+.maplibregl-ctrl-group button + button {
+  border-top: 1px solid rgba(71, 85, 105, 0.6) !important;
+}
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  filter: invert(0.85);
+}
+.maplibregl-ctrl-attrib {
+  background: rgba(15, 23, 42, 0.85) !important;
+  color: #94a3b8 !important;
+  border-radius: 8px 0 0 0;
+}
+.maplibregl-ctrl-attrib a { color: #94a3b8 !important; }
+.maplibregl-popup-content {
+  background: #1e293b !important;
+  color: #e2e8f0 !important;
+  border-radius: 12px !important;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5) !important;
+}
+.maplibregl-popup-tip { border-top-color: #1e293b !important; }

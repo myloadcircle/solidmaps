@@ -30,6 +30,8 @@ const FUEL_TYPES: FuelType[] = ['petrol', 'diesel', 'electric', 'hybrid', 'hydro
 const USER_AGENT = 'solidmaps-api/1.0 (https://solidmaps.app)';
 
 const ALLOWED_ORIGINS: string[] = [
+  'https://solidmap.app',
+  'https://www.solidmap.app',
   'https://solidmaps.pages.dev',
   'https://solidmaps-api.fbirele.workers.dev',
   'http://localhost:3000',
@@ -172,6 +174,18 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
     subscription_tier: user.subscription_tier === 'pro' ? 'pro' : 'free',
   };
   return json(payload, 200, env);
+}
+
+/** Play Data safety: account + all owned records must be deletable in-app. */
+async function handleAccountDelete(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return fail('Authentication required', 401, env);
+  await env.DB.batch([
+    env.DB.prepare('DELETE FROM vehicle_profiles WHERE user_id = ?').bind(user.id),
+    env.DB.prepare('DELETE FROM saved_routes WHERE user_id = ?').bind(user.id),
+    env.DB.prepare('DELETE FROM users WHERE id = ?').bind(user.id),
+  ]);
+  return json({ deleted: true }, 200, env);
 }
 
 /** Cross-isolate fixed-window limiter in KV: 30 geocodes/min per client IP. */
@@ -822,6 +836,7 @@ export default {
       if (seg[0] !== 'api') inner = new Response('Not found', { status: 404 });
       else if (seg[1] === 'auth' && seg[2] === 'issue' && request.method === 'POST') inner = await handleIssue(request, env);
       else if (seg[1] === 'auth' && seg[2] === 'me' && request.method === 'GET') inner = await handleMe(request, env);
+      else if (seg[1] === 'auth' && seg[2] === 'account' && request.method === 'DELETE') inner = await handleAccountDelete(request, env);
       else if (seg[1] === 'geocode' && request.method === 'GET') inner = await handleGeocode(request, url, env, ctx);
       else if (seg[1] === 'route' && request.method === 'POST') inner = await handleRoute(request, env, ctx);
       else if (seg[1] === 'parking' && request.method === 'GET') inner = await handleParking(url, env, ctx);
