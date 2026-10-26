@@ -1,7 +1,10 @@
-# SolidMaps → Play Console runbook (everything is staged; this is the invocation)
+# SolidMaps → Play Console runbook
 
-State at handoff: **everything below this line is done.** Console work starts at Step 1.
-Time needed: ~30 min. Only the final production "Send for review" is the owner's click.
+## PROGRESS (26 Oct, automated lane)
+- ✅ **App CREATED**: SolidMaps, package uk.co.loadcircle.solidmaps, app id 4972266415214389250 (verified: Console tab title "Dashboard | SolidMaps"). Package availability was explicitly confirmed by the Console before creation.
+- ⚠️ AAB upload + listing forms NOT yet done: the automation lane was driving the owner's Edge session, which kept freezing/minimizing (CDP hidden-page trap). Remaining steps are Step 2-4 below (~15 min with the browser in the foreground), then Step 5.
+
+State: everything below is prepared and verified. Console work resumes at Step 2.
 
 ## Done (evidence)
 - TWA project: `play/twa/` (com.google.androidbrowserhelper 2.5.0, AGP 8.5.2, Gradle 8.7, minSdk 24 / target 34)
