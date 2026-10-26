@@ -198,6 +198,69 @@ async function geocodeAllowed(env: Env, ip: string): Promise<boolean> {
   return true;
 }
 
+/** UK postcode shapes: full "HA3 8SX" or district "HA3". UK postcodes are globally unique. */
+const UK_FULL_POSTCODE_RE = /^[a-z]{1,2}\d[a-z\d]?\s*\d[a-z]{2}$/i;
+const UK_OUTCODE_RE = /^[a-z]{1,2}\d[a-z\d]?$/i;
+
+interface GeoHit {
+  id: string;
+  text: string;
+  lat: number;
+  lon: number;
+}
+
+/** Authoritative UK postcode geocoding via postcodes.io (free, no key). */
+async function geocodeUKPostcode(q: string): Promise<GeoHit[] | null> {
+  const compact = q.replace(/\s+/g, '').toUpperCase();
+  try {
+    if (UK_FULL_POSTCODE_RE.test(q.trim())) {
+      const res = await fetch(`https://api.postcodes.io/postcodes/${compact}`, {
+        headers: { 'User-Agent': USER_AGENT },
+      });
+      if (res.ok) {
+        const j = (await res.json()) as {
+          result?: { postcode: string; latitude: number; longitude: number; admin_district: string[] };
+        };
+        if (j.result) {
+          return [
+            {
+              id: `pc/${j.result.postcode}`,
+              text: `${j.result.postcode} — ${j.result.admin_district.join(', ')}`,
+              lat: j.result.latitude,
+              lon: j.result.longitude,
+            },
+          ];
+        }
+      }
+      return [];
+    }
+    if (UK_OUTCODE_RE.test(q.trim())) {
+      const res = await fetch(`https://api.postcodes.io/outcodes/${compact}`, {
+        headers: { 'User-Agent': USER_AGENT },
+      });
+      if (res.ok) {
+        const j = (await res.json()) as {
+          result?: { outcode: string; latitude: number; longitude: number; admin_district: string[] };
+        };
+        if (j.result) {
+          return [
+            {
+              id: `out/${j.result.outcode}`,
+              text: `${j.result.outcode} — ${j.result.admin_district.join(', ')}`,
+              lat: j.result.latitude,
+              lon: j.result.longitude,
+            },
+          ];
+        }
+      }
+      return [];
+    }
+  } catch {
+    // postcodes.io unreachable — fall through to the general geocoder.
+  }
+  return null;
+}
+
 async function handleGeocode(request: Request, url: URL, env: Env, ctx: ExecutionContext): Promise<Response> {
   const q = url.searchParams.get('q') ?? '';
   if (q.trim().length < 2) return fail('Missing query parameter "q"', 400, env);
@@ -207,7 +270,7 @@ async function handleGeocode(request: Request, url: URL, env: Env, ctx: Executio
   }
   const normalized = q.trim().toLowerCase().replace(/\s+/g, ' ');
   if (env.CACHE) {
-    const cached = await env.CACHE.get(`geo:${normalized}`);
+    const cached = await env.CACHE.get(`geo:v2:${normalized}`);
     if (cached) {
       return new Response(cached, {
         status: 200,
@@ -215,17 +278,25 @@ async function handleGeocode(request: Request, url: URL, env: Env, ctx: Executio
       });
     }
   }
-  const res = await fetch(
-    `https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(normalized)}`,
-    { headers: { 'User-Agent': USER_AGENT } },
-  );
-  if (!res.ok) return fail('Geocoding provider error', 502, env);
-  const data = (await res.json()) as { place_id: number; display_name: string; lat: string; lon: string }[];
-  const payload = JSON.stringify(
-    data.map((d) => ({ id: String(d.place_id), text: d.display_name, lat: parseFloat(d.lat), lon: parseFloat(d.lon) })),
-  );
+  // UK postcodes resolve authoritatively; generic geocoders misfile them worldwide.
+  let hits: GeoHit[] | null = await geocodeUKPostcode(q);
+  if (hits === null || hits.length === 0) {
+    const res = await fetch(
+      `https://nominatim.openstreetmap.org/search?format=json&limit=5&q=${encodeURIComponent(normalized)}`,
+      { headers: { 'User-Agent': USER_AGENT } },
+    );
+    if (!res.ok) return fail('Geocoding provider error', 502, env);
+    const data = (await res.json()) as { place_id: number; display_name: string; lat: string; lon: string }[];
+    hits = data.map((d) => ({
+      id: String(d.place_id),
+      text: d.display_name,
+      lat: parseFloat(d.lat),
+      lon: parseFloat(d.lon),
+    }));
+  }
+  const payload = JSON.stringify(hits);
   if (env.CACHE) {
-    ctx.waitUntil(env.CACHE.put(`geo:${normalized}`, payload, { expirationTtl: 86400 }).catch(() => {}));
+    ctx.waitUntil(env.CACHE.put(`geo:v2:${normalized}`, payload, { expirationTtl: 86400 }).catch(() => {}));
   }
   return new Response(payload, { status: 200, headers: { 'Content-Type': 'application/json' } });
 }

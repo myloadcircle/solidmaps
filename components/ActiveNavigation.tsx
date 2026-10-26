@@ -148,12 +148,22 @@ export default function ActiveNavigation({
   const step = route.steps[stepIndex];
   const shownMeters = remaining && navigating ? remaining.meters : route.distance_meters;
   const shownSeconds = remaining && navigating ? remaining.seconds : route.duration_seconds;
+  const mins = Math.max(1, Math.round(shownSeconds / 60));
+  const durationLabel =
+    mins >= 1440 ? `${Math.floor(mins / 1440)} d ${Math.round((mins % 1440) / 60)} h` : `${mins} min`;
   const traffic =
     route.provider === 'mapbox' && route.mode === 'car'
       ? 'Live traffic data active'
       : route.mode === 'transit'
         ? 'Scheduled service'
         : 'No live traffic feed for this route';
+  // When the amber straight-line banner is shown, drop the duplicate
+  // "Straight-line route" warning and fold its cause into the banner.
+  const warnings =
+    route.provider === 'haversine'
+      ? route.warnings.filter((w) => w.title !== 'Straight-line route')
+      : route.warnings;
+  const haversineCause = route.warnings.find((w) => w.title === 'Straight-line route')?.detail;
 
   return (
     <div className="absolute left-3 right-3 top-16 z-20 rounded-2xl border border-slate-700 bg-slate-900/95 p-4 text-slate-100 shadow-xl backdrop-blur">
@@ -161,8 +171,8 @@ export default function ActiveNavigation({
         <div>
           <div className="text-lg font-semibold">
             {navigating
-              ? `${(shownMeters / 1000).toFixed(1)} km · ${Math.max(1, Math.round(shownSeconds / 60))} min left`
-              : `${Math.round(route.distance_meters / 10) / 100} km · ${Math.max(1, Math.round(route.duration_seconds / 60))} min`}
+              ? `${(shownMeters / 1000).toFixed(1)} km · ${durationLabel} left`
+              : `${(route.distance_meters / 1000).toFixed(1)} km · ${durationLabel}`}
           </div>
           <div className="text-xs text-slate-400">
             {route.mode.toUpperCase()} via {route.provider} · {traffic}
@@ -199,6 +209,7 @@ export default function ActiveNavigation({
       {route.provider === 'haversine' && (
         <div className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/15 p-3 text-sm text-amber-300">
           ⚠️ Straight-line estimate — road routing unavailable. No turn-by-turn directions.
+          {haversineCause && <span className="mt-1 block text-xs text-amber-200/80">{haversineCause}</span>}
         </div>
       )}
       {gpsError && (
@@ -206,9 +217,9 @@ export default function ActiveNavigation({
           GPS: {gpsError}
         </div>
       )}
-      {route.warnings.length > 0 && (
+      {warnings.length > 0 && (
         <div className="mt-2 space-y-1">
-          {route.warnings.map((w, i) => (
+          {warnings.map((w, i) => (
             <div
               key={i}
               className={`rounded-lg border px-3 py-2 text-sm ${
