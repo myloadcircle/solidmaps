@@ -20,6 +20,7 @@ export default function Home() {
   const [showVehicles, setShowVehicles] = useState(false);
   const [email, setEmail] = useState('');
   const [authError, setAuthError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const lastPlanRef = useRef<{ origin: LatLon; destination: LatLon; mode: Mode; vehicle_id?: string } | null>(null);
@@ -101,8 +102,11 @@ export default function Home() {
                   if (!confirm('Delete your account and all vehicle profiles? This cannot be undone.')) return;
                   api
                     .deleteAccount()
-                    .then(() => logout())
-                    .catch(() => setAuthError('Delete failed — try again'));
+                    .then(() => {
+                      setNotice(null);
+                      logout();
+                    })
+                    .catch(() => setNotice('Account deletion failed — check your connection and try again.'));
                 }}
                 className="rounded-lg border border-slate-700 px-2 py-1 text-xs text-slate-500 hover:border-rose-800 hover:text-rose-400"
                 aria-label="Delete account"
@@ -136,6 +140,20 @@ export default function Home() {
           )}
         </div>
       </header>
+
+      {notice && (
+        <div
+          role="alert"
+          className="absolute left-1/2 top-16 z-40 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 rounded-xl border border-rose-500/50 bg-slate-900/95 p-3 text-xs text-rose-200 shadow-xl backdrop-blur"
+        >
+          <div className="flex items-center gap-2">
+            <span className="flex-1">{notice}</span>
+            <button onClick={() => setNotice(null)} aria-label="Close" className="px-1 text-rose-200/60 hover:text-rose-100">
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {route && (
         <ActiveNavigation

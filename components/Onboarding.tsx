@@ -157,7 +157,7 @@ export default function Onboarding({ onDone }: { onDone: () => void }) {
       >
         {slide === SLIDES.length - 1 ? 'Start exploring' : 'Continue'}
       </button>
-      <p className="mt-3 text-[11px] text-slate-600">Esc to skip · works offline once loaded</p>
+      <p className="mt-3 text-[11px] text-slate-600">Esc to skip · installable to your home screen</p>
     </div>
   );
 }

@@ -247,6 +247,12 @@ export const SolidMap: React.FC<SolidMapProps> = ({
             setMapLoaded(true);
             setErrorState(null);
           });
+          // Terminal state: if the fallback hasn't settled, stop pretending it's loading.
+          window.setTimeout(() => {
+            if (mapInstanceRef.current && !loadedRef.current) {
+              setErrorState('Maps are unreachable right now (offline or blocked network). Route planning and directions still work — tap Retry when you are back online.');
+            }
+          }, 8000);
         } catch {
           setErrorState(`Map failed to render: ${detail}`);
         }
@@ -339,7 +345,7 @@ export const SolidMap: React.FC<SolidMapProps> = ({
 
       <div className="absolute bottom-4 left-4 z-10 hidden items-center space-x-2 rounded-md border border-gray-800 bg-gray-900/90 px-3 py-1.5 font-mono text-xs text-gray-400 shadow-lg md:flex">
         <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-500" />
-        <span>solidmaps.app // edge-native</span>
+        <span>solidmap.app // edge-native</span>
       </div>
     </div>
   );

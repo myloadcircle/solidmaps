@@ -34,6 +34,14 @@ body {
 }
 
 /* MapLibre control theming to match the dark shell */
+
+/* The header overlays the map (absolute top-0 z-30, ~76px tall) — push the
+   control stacks below it so they are not half-hidden and untappable. */
+.maplibregl-ctrl-top-right,
+.maplibregl-ctrl-top-left {
+  margin-top: 84px !important;
+}
+
 .maplibregl-ctrl-group {
   background: rgba(15, 23, 42, 0.92) !important;
   border: 1px solid rgba(71, 85, 105, 0.6) !important;

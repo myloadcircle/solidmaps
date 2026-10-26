@@ -33,9 +33,15 @@ export default function UpsellModal({ feature, onClose }: UpsellModalProps) {
             Upgrade now
           </a>
         ) : (
-          <p className="mt-5 text-center text-xs text-slate-500">
-            Checkout not configured. Set NEXT_PUBLIC_UPGRADE_URL.
-          </p>
+          <>
+            <p className="mt-5 rounded-xl border border-slate-700 bg-slate-800/60 px-3 py-2 text-center text-xs text-slate-400">
+              Pro isn't open for sign-ups yet — pricing is being finalised. Everything here works free
+              in the meantime.
+            </p>
+            <p className="mt-1 text-center text-[11px] text-slate-600">
+              No payment is taken; nothing to cancel.
+            </p>
+          </>
         )}
         <button onClick={onClose} className="mt-3 w-full rounded-xl border border-slate-600 py-2 text-sm">
           Maybe later

@@ -6,6 +6,7 @@ import ServiceWorkerRegister from '@/components/ServiceWorkerRegister';
 
 export const metadata: Metadata = {
   metadataBase: new URL('https://solidmap.app'),
+  alternates: { canonical: '/' },
   title: 'SolidMaps — Drive smarter. Park legally.',
   description:
     'Free turn-by-turn navigation with voice guidance, automatic rerouting and live parking intelligence. Truck-aware route warnings for professional drivers.',

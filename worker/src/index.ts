@@ -54,7 +54,7 @@ function corsHeaders(request: Request, env: Env): HeadersInit {
   if (!origin) return {};
   return {
     'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     Vary: 'Origin',
   };
@@ -815,7 +815,7 @@ function withCors(response: Response, request: Request, env: Env): Response {
   const origin = allowedOrigin(request, env);
   if (origin) {
     headers.set('Access-Control-Allow-Origin', origin);
-    headers.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    headers.set('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
     headers.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
     headers.set('Vary', 'Origin');
   } else {
