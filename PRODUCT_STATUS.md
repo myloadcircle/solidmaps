@@ -1,5 +1,20 @@
 # solidmaps — product status
 
+## LAUNCH ROUND (2026-10-25 evening) — solidmap.app is LIVE
+- **Domain**: https://solidmap.app (+ www) serving the current build; HTTPS forced, CF cert, manifest/SW/legal 200.
+  Was on stale project `solidmaps-site`; DNS scope-blocked for wrangler token → release path ships BOTH Pages
+  projects via `scripts/deploy.sh` (build + typecheck + worker + both Pages + live verify). docs/domain-audit.md.
+- **Onboarding**: 4 screens, skippable (Esc), reduced-motion aware, once per device — live.
+- **PWA**: PNG icons 192/512 + maskable (sharp-rasterized), manifest id/name — install criteria met.
+- **Play Data safety blocker FIXED**: `DELETE /api/auth/account` (D1 batch: profiles, saved routes, user) +
+  in-app Delete control. Verified live.
+- **CORS/vars**: solidmap.app origins allowlisted; ALLOWED_ORIGIN = https://solidmap.app.
+- **Launch docs**: docs/{launch-audit, domain-audit, play-store-readiness (+listing copy), ui-upgrade,
+  monetisation, truckroute-plan, reuse-strategy}.md
+- Worker version `15afbb13`+; commits `c8d01f8`… on master.
+- OWED: real-device QA (install prompt/voice/GPS drive), Play AAB lane (TWA + assetlinks), DNS
+  consolidation dashboard edit, Valhalla endpoint decision.
+
 ## Production-readiness round (2026-10-25, deployed + verified)
 - **CORS**: `*` → allowlist (prod, `*.solidmaps.pages.dev` previews, localhost) applied at the fetch boundary. Verified: evil origin gets no ACAO header, prod/preview/local echo correctly.
 - **KV cache namespace** `CACHE` (00d89c7e…): geocode 24 h, route 5 min, parking 24 h per ~110 m cell. Hit headers verified via raw response dump. ★ ROOT CAUSE NOTE: fire-and-forget `void CACHE.put(...)` is cancelled when the request ends — all background puts MUST go through `ctx.waitUntil()` (this silently killed every cache write for a whole deploy).
