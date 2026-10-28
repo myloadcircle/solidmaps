@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useAuth } from '@/lib/auth';
 import { api } from '@/lib/api';
+import { checkTruckRoute, type BridgeCheck } from '@/lib/bridges';
 import { decodePlusCode, encodePlusCode, isPlusCode } from '@/lib/pluscode';
 import type { LatLon, Mode, ParkingZone, RouteResponse, VehicleProfile } from '@/shared/types';
 import LocationInput from './LocationInput';
@@ -23,9 +24,10 @@ interface RoutePlannerProps {
   parkingZones: ParkingZone[];
   onParkingZones: (zones: ParkingZone[]) => void;
   onPlanned?: (plan: { origin: LatLon; destination: LatLon; mode: Mode; vehicle_id?: string }) => void;
+  onBridgeCheck?: (check: BridgeCheck | null) => void;
 }
 
-export default function RoutePlanner({ onRoute, parkingZones, onParkingZones, onPlanned }: RoutePlannerProps) {
+export default function RoutePlanner({ onRoute, parkingZones, onParkingZones, onPlanned, onBridgeCheck }: RoutePlannerProps) {
   const { user } = useAuth();
   const isPro = user?.subscription_tier === 'pro';
   const [originText, setOriginText] = useState('');
@@ -110,11 +112,24 @@ export default function RoutePlanner({ onRoute, parkingZones, onParkingZones, on
           mode,
           vehicle_id: isPro && vehicleId ? vehicleId : undefined,
         });
+        onBridgeCheck?.(null);
         onParkingZones([]);
         onRoute(route);
         if (proParking) {
           const parking = await api.parking(destination.lat, destination.lon);
           onParkingZones(parking.zones);
+        }
+        // Real truck-restriction check (TruckRoute pipeline): OSRM can't see
+        // bridge heights, so scan OSM maxheight/maxweight along the geometry.
+        if (mode === 'truck' && route.geometry && isPro) {
+          const profile = profiles.find((p) => p.id === (vehicleId || profiles[0]?.id)) ?? profiles[0];
+          if (profile && (profile.max_height_meters || profile.gross_weight_kg)) {
+            onBridgeCheck?.({ status: 'ok', findings: [], checkedAt: 0 }); // clears old; UI shows "checking"
+            void checkTruckRoute(route.geometry.coordinates, {
+              heightM: profile.max_height_meters,
+              weightKg: profile.gross_weight_kg,
+            }).then(onBridgeCheck);
+          }
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Route planning failed');
@@ -122,7 +137,7 @@ export default function RoutePlanner({ onRoute, parkingZones, onParkingZones, on
         setLoading(false);
       }
     },
-    [originText, destinationText, mode, proParking, isPro, vehicleId, resolve, resolved, onRoute, onParkingZones, onPlanned],
+    [originText, destinationText, mode, proParking, isPro, vehicleId, resolve, resolved, onRoute, onParkingZones, onPlanned, onBridgeCheck, profiles],
   );
 
   return (

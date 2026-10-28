@@ -9,6 +9,7 @@ import VehicleProfileManager from '@/components/VehicleProfileManager';
 import Onboarding, { hasSeenOnboarding } from '@/components/Onboarding';
 import { useAuth } from '@/lib/auth';
 import { api } from '@/lib/api';
+import type { BridgeCheck } from '@/lib/bridges';
 import type { LatLon, Mode, ParkingZone, RouteResponse } from '@/shared/types';
 
 const SolidMap = dynamic(() => import('@/components/SolidMap').then((m) => m.SolidMap), { ssr: false });
@@ -16,6 +17,7 @@ const SolidMap = dynamic(() => import('@/components/SolidMap').then((m) => m.Sol
 export default function Home() {
   const { user, login, logout, loading } = useAuth();
   const [route, setRoute] = useState<RouteResponse | null>(null);
+  const [bridgeCheck, setBridgeCheck] = useState<BridgeCheck | null>(null);
   const [parkingZones, setParkingZones] = useState<ParkingZone[]>([]);
   const [showVehicles, setShowVehicles] = useState(false);
   const [email, setEmail] = useState('');
@@ -160,6 +162,7 @@ export default function Home() {
           key={`${route.provider}-${route.mode}-${route.distance_meters}`}
           route={route}
           map={mapRef.current}
+          bridgeCheck={bridgeCheck}
           onClose={() => setRoute(null)}
           onReroute={handleReroute}
         />
@@ -174,6 +177,7 @@ export default function Home() {
         parkingZones={parkingZones}
         onParkingZones={setParkingZones}
         onPlanned={handlePlanned}
+        onBridgeCheck={setBridgeCheck}
       />
       <div className="absolute bottom-4 right-4 z-10 flex items-center gap-3 rounded-md border border-gray-800 bg-gray-900/90 px-3 py-1.5 font-mono text-xs text-gray-400 shadow-lg">
         <a href="/privacy.html" className="hover:text-slate-200">Privacy</a>

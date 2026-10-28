@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type * as maplibregl from 'maplibre-gl';
+import type { BridgeCheck } from '@/lib/bridges';
 import type { LatLon, RouteResponse } from '@/shared/types';
 
 /** Metres from a point to the route polyline, plus metres travelled along it. */
@@ -56,11 +57,13 @@ function speak(text: string): void {
 export default function ActiveNavigation({
   route,
   map,
+  bridgeCheck,
   onClose,
   onReroute,
 }: {
   route: RouteResponse;
   map: maplibregl.Map | null;
+  bridgeCheck?: BridgeCheck | null;
   onClose: () => void;
   onReroute: (from: LatLon) => void;
 }) {
@@ -231,6 +234,43 @@ export default function ActiveNavigation({
               ⚠️ {w.title} — {w.detail}
             </div>
           ))}
+        </div>
+      )}
+
+      {bridgeCheck?.status === 'ok' && bridgeCheck.checkedAt === 0 && (
+        <div className="mt-2 rounded-lg border border-slate-600/40 bg-slate-800/60 p-3 text-xs text-slate-400">
+          Checking live bridge clearances along this route (OpenStreetMap)…
+        </div>
+      )}
+      {bridgeCheck?.status === 'ok' && bridgeCheck.checkedAt > 0 && (
+        <div className="mt-2 rounded-lg border border-slate-600/40 bg-slate-800/60 p-3">
+          <div className="text-xs font-semibold text-slate-300">
+            Bridge &amp; restriction check · {bridgeCheck.findings.length === 0 ? 'nothing found on this route' : `${bridgeCheck.findings.length} along route`}
+          </div>
+          {bridgeCheck.findings.length > 0 && (
+            <ul className="mt-1.5 space-y-1">
+              {bridgeCheck.findings.map((f) => (
+                <li key={f.id} className="flex items-center gap-2 text-xs">
+                  <span
+                    aria-hidden="true"
+                    className={`h-2 w-2 shrink-0 rounded-full ${
+                      f.severity === 'critical' ? 'bg-rose-500' : f.severity === 'warning' ? 'bg-amber-400' : 'bg-slate-500'
+                    }`}
+                  />
+                  <span className={f.severity === 'critical' ? 'font-semibold text-rose-300' : 'text-slate-300'}>
+                    {f.kind === 'height' ? `${f.value} m clearance` : `${f.value} t limit`}
+                    {f.estimated ? ' (est.)' : ''}
+                  </span>
+                  <span className="text-slate-500">at {f.atKm.toFixed(1)} km</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {bridgeCheck.findings.length === 0 && (
+            <p className="mt-1 text-xs text-slate-500">
+              No OSM height/weight restrictions recorded on this route — still obey road signs.
+            </p>
+          )}
         </div>
       )}
 
