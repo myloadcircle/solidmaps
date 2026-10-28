@@ -1,5 +1,5 @@
-const SHELL_CACHE = 'solidmaps-shell-v3';
-const TILE_CACHE = 'solidmaps-tiles-v3';
+const SHELL_CACHE = 'solidmaps-shell-v4';
+const TILE_CACHE = 'solidmaps-tiles-v4';
 const SHELL = ['/', '/manifest.json', '/icon.svg'];
 
 self.addEventListener('install', (event) => {

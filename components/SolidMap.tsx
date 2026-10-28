@@ -247,11 +247,25 @@ export const SolidMap: React.FC<SolidMapProps> = ({
             setMapLoaded(true);
             setErrorState(null);
           });
-          // Terminal state: if the fallback hasn't settled, stop pretending it's loading.
+          // Safety net: if tiles genuinely never arrive, say so honestly.
+          // Check the engine, not a flag — tiles can render while 'load'/'idle'
+          // events race us (a rendered map must never be called unreachable).
           window.setTimeout(() => {
-            if (mapInstanceRef.current && !loadedRef.current) {
-              setErrorState('Maps are unreachable right now (offline or blocked network). Route planning and directions still work — tap Retry when you are back online.');
+            const m = mapInstanceRef.current;
+            if (!m || loadedRef.current) return;
+            let tilesReady = false;
+            try {
+              tilesReady = m.areTilesLoaded();
+            } catch {
+              tilesReady = false;
             }
+            if (tilesReady) {
+              loadedRef.current = true;
+              setMapLoaded(true);
+              setErrorState(null);
+              return;
+            }
+            setErrorState('Maps are unreachable right now (offline or blocked network). Route planning and directions still work — tap Retry when you are back online.');
           }, 8000);
         } catch {
           setErrorState(`Map failed to render: ${detail}`);
