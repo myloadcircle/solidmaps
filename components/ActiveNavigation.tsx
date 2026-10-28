@@ -71,8 +71,11 @@ export default function ActiveNavigation({
   const [navigating, setNavigating] = useState(false);
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [remaining, setRemaining] = useState<{ meters: number; seconds: number } | null>(null);
+  const [speedKmh, setSpeedKmh] = useState<number | null>(null);
   const offRouteRef = useRef(0);
   const stepIndexRef = useRef(0);
+  const approachAnnouncedRef = useRef(-1);
+  const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
 
   useEffect(() => {
     setStepIndex(0);
@@ -92,9 +95,28 @@ export default function ActiveNavigation({
       return;
     }
     speak('Starting navigation. ' + (route.steps[0]?.instruction ?? 'Follow the route.'));
+    // Keep the screen awake for the whole drive — a satnav that sleeps is useless.
+    (async () => {
+      try {
+        const wl = (navigator as Navigator & { wakeLock?: { request: (t: 'screen') => Promise<{ release: () => Promise<void> }> } }).wakeLock;
+        if (wl) wakeLockRef.current = await wl.request('screen');
+      } catch {
+        // Wake Lock unsupported or denied — navigation continues, screen may sleep.
+      }
+    })();
+    const relock = () => {
+      if (document.visibilityState === 'visible' && !wakeLockRef.current) {
+        const wl = (navigator as Navigator & { wakeLock?: { request: (t: 'screen') => Promise<{ release: () => Promise<void> }> } }).wakeLock;
+        wl?.request('screen').then((l) => (wakeLockRef.current = l)).catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', relock);
     const watchId = navigator.geolocation.watchPosition(
       (pos) => {
         setGpsError(null);
+        if (pos.coords.speed != null && isFinite(pos.coords.speed) && pos.coords.speed >= 0) {
+          setSpeedKmh(Math.round(pos.coords.speed * 3.6));
+        }
         const here: LatLon = { lat: pos.coords.latitude, lon: pos.coords.longitude };
         const { offMeters, travelledMeters } = projectOnRoute(coordinates, here);
         if (totalMeters > 0) {
@@ -102,6 +124,17 @@ export default function ActiveNavigation({
             meters: Math.max(0, totalMeters - travelledMeters),
             seconds: Math.max(0, route.duration_seconds * (1 - travelledMeters / totalMeters)),
           });
+        }
+        // Approach announcement: "In 200 metres, turn right…" — said once.
+        const nextIdx = stepIndexRef.current + 1;
+        const nextManeuverAt = route.steps[nextIdx]?.distance_from_start;
+        if (nextManeuverAt != null && approachAnnouncedRef.current !== nextIdx) {
+          const toManeuver = nextManeuverAt - travelledMeters;
+          if (toManeuver > 0 && toManeuver <= 250) {
+            approachAnnouncedRef.current = nextIdx;
+            const rounded = toManeuver >= 200 ? 200 : toManeuver >= 100 ? 100 : 50;
+            speak(`In ${rounded} metres, ${route.steps[nextIdx].instruction.charAt(0).toLowerCase()}${route.steps[nextIdx].instruction.slice(1)}`);
+          }
         }
         // Auto-advance: passed the next maneuver point (30 m slack).
         while (
@@ -111,7 +144,10 @@ export default function ActiveNavigation({
         ) {
           stepIndexRef.current += 1;
           setStepIndex(stepIndexRef.current);
-          speak(route.steps[stepIndexRef.current].instruction);
+          // Skip the repeat if the approach announcement already said it.
+          if (approachAnnouncedRef.current !== stepIndexRef.current) {
+            speak(route.steps[stepIndexRef.current].instruction);
+          }
         }
         // Off-route: 60 m off the line on two consecutive fixes → replan.
         if (offMeters > 60) {
@@ -138,6 +174,9 @@ export default function ActiveNavigation({
     );
     return () => {
       navigator.geolocation.clearWatch(watchId);
+      document.removeEventListener('visibilitychange', relock);
+      void wakeLockRef.current?.release().catch(() => {});
+      wakeLockRef.current = null;
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         try {
           window.speechSynthesis.cancel();
@@ -179,6 +218,7 @@ export default function ActiveNavigation({
           </div>
           <div className="text-xs text-slate-400">
             {route.mode.toUpperCase()} via {route.provider} · {traffic}
+            {navigating && speedKmh != null ? ` · ${speedKmh} km/h` : ''}
           </div>
         </div>
         <div className="flex items-center gap-2">
