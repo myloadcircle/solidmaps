@@ -1,16 +1,20 @@
 plugins { id 'com.android.application' }
 
+// Estate convention: versionCode = epoch minutes, so every build is unique and
+// never collides with an artifact already uploaded to Play.
+def buildVersionCode = (int) (System.currentTimeMillis() / 60000L)
+
 // Signing material is passed at build time from the estate vault, never committed:
 // gradle -PandroidStoreFile=C:/DEV/secrets/loadcircle-upload.jks -PandroidStorePassword=... assembleRelease
 android {
     namespace 'uk.co.loadcircle.solidmaps'
-    compileSdk 34
+    compileSdk 36
 
     defaultConfig {
         applicationId 'uk.co.loadcircle.solidmaps'
         minSdk 24
-        targetSdk 34
-        versionCode 1
+        targetSdk 36
+        versionCode buildVersionCode
         versionName '1.0'
     }
 

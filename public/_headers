@@ -12,3 +12,16 @@
 /icon.svg
 /manifest.json
   Cache-Control: public, max-age=86400
+
+# On-device routing engine (Valhalla WebAssembly). Kept out of the immutable rule: the filenames
+# are not content-hashed, so an SDK upgrade rewrites them in place at the same URL.
+/wasm/*
+  Cache-Control: public, max-age=3600
+
+# MapLibre's worker bundle. The MIME type is stated explicitly because a module worker refuses to
+# start if the response is not javascript. Kept out of the immutable rule for the same reason as
+# /wasm/*: setWorkerUrl() pins the filename, so a maplibre-gl upgrade overwrites it in place.
+/maplibre-gl-worker.js
+  Content-Type: text/javascript
+  Cache-Control: public, max-age=3600
+

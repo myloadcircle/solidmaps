@@ -1,13 +1,32 @@
 'use client';
 
+import { useMemo } from 'react';
+import { useAuth } from '@/lib/auth';
+
 interface UpsellModalProps {
   feature: string | null;
   onClose: () => void;
 }
 
 export default function UpsellModal({ feature, onClose }: UpsellModalProps) {
-  if (!feature) return null;
+  const { user } = useAuth();
   const upgradeUrl = process.env.NEXT_PUBLIC_UPGRADE_URL;
+
+  // Attach the signed-in user so the Stripe webhook can flip the right account to Pro.
+  const checkoutUrl = useMemo(() => {
+    if (!upgradeUrl) return null;
+    if (!user) return upgradeUrl;
+    try {
+      const url = new URL(upgradeUrl);
+      url.searchParams.set('client_reference_id', user.id);
+      if (user.email) url.searchParams.set('prefilled_email', user.email);
+      return url.toString();
+    } catch {
+      return upgradeUrl;
+    }
+  }, [upgradeUrl, user]);
+
+  if (!feature) return null;
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
       <div
@@ -25,9 +44,9 @@ export default function UpsellModal({ feature, onClose }: UpsellModalProps) {
           Height and weight limits are flagged as warnings; routes avoid them only where the
           underlying OpenStreetMap data supports it.
         </p>
-        {upgradeUrl ? (
+        {checkoutUrl ? (
           <a
-            href={upgradeUrl}
+            href={checkoutUrl}
             className="mt-5 block rounded-xl bg-sky-600 py-3 text-center font-semibold"
           >
             Upgrade now

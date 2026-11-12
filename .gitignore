@@ -5,6 +5,8 @@ out/
 .env*
 .dev.vars
 dist/
+/public/wasm/
+/public/maplibre-gl-worker.js
 *.tsbuildinfo
 play/twa/.gradle/
 play/twa/app/build/

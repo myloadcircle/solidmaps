@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import type * as maplibregl from 'maplibre-gl';
+import type { MapView } from '@/components/SolidMap';
 import type { BridgeCheck } from '@/lib/bridges';
 import type { LatLon, RouteResponse } from '@/shared/types';
 
@@ -62,7 +62,7 @@ export default function ActiveNavigation({
   onReroute,
 }: {
   route: RouteResponse;
-  map: maplibregl.Map | null;
+  map: MapView | null;
   bridgeCheck?: BridgeCheck | null;
   onClose: () => void;
   onReroute: (from: LatLon) => void;

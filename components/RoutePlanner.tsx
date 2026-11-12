@@ -4,9 +4,10 @@ import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useAuth } from '@/lib/auth';
 import { api } from '@/lib/api';
+import { onDeviceRoutingEnabled, routeOnDevice } from '@/lib/routewasm';
 import { checkTruckRoute, type BridgeCheck } from '@/lib/bridges';
 import { decodePlusCode, encodePlusCode, isPlusCode } from '@/lib/pluscode';
-import type { LatLon, Mode, ParkingZone, RouteResponse, VehicleProfile } from '@/shared/types';
+import type { LatLon, Mode, ParkingZone, RouteRequest, RouteResponse, VehicleProfile } from '@/shared/types';
 import LocationInput from './LocationInput';
 import UpsellModal from './UpsellModal';
 
@@ -78,6 +79,23 @@ export default function RoutePlanner({ onRoute, parkingZones, onParkingZones, on
     return { lat: results[0].lat, lon: results[0].lon };
   }, []);
 
+  // Prefer on-device WebAssembly routing when the build enables it, and silently fall back to the
+  // Worker engine if it cannot serve the request (no tiles for the area, route beyond the local
+  // span guard, OPFS unavailable) — a navigation app must never dead-end on an engine choice.
+  const planRoute = useCallback(
+    async (request: RouteRequest, profile: VehicleProfile | null): Promise<RouteResponse> => {
+      if (onDeviceRoutingEnabled()) {
+        try {
+          return await routeOnDevice(request, profile);
+        } catch {
+          // fall through to the server engine
+        }
+      }
+      return api.planRoute(request);
+    },
+    [],
+  );
+
   const plan = useCallback(
     async (e: FormEvent) => {
       e.preventDefault();
@@ -98,20 +116,15 @@ export default function RoutePlanner({ onRoute, parkingZones, onParkingZones, on
       try {
         const origin = await resolve(originText, resolved.destination);
         const destination = await resolve(destinationText, resolved.origin);
-        const route = await api.planRoute({
-          origin,
-          destination,
-          mode,
-          vehicle_id: isPro && vehicleId ? vehicleId : undefined,
-        });
+        const vehicle_id = isPro && vehicleId ? vehicleId : undefined;
+        const activeProfile =
+          isPro && (mode === 'truck' || mode === 'car')
+            ? profiles.find((p) => p.id === (vehicleId || profiles[0]?.id)) ?? profiles[0] ?? null
+            : null;
+        const route = await planRoute({ origin, destination, mode, vehicle_id }, activeProfile);
         setResolved({ origin, destination });
         setDestinationCode(encodePlusCode(destination.lat, destination.lon));
-        onPlanned?.({
-          origin,
-          destination,
-          mode,
-          vehicle_id: isPro && vehicleId ? vehicleId : undefined,
-        });
+        onPlanned?.({ origin, destination, mode, vehicle_id });
         onBridgeCheck?.(null);
         onParkingZones([]);
         onRoute(route);
@@ -122,7 +135,7 @@ export default function RoutePlanner({ onRoute, parkingZones, onParkingZones, on
         // Real truck-restriction check (TruckRoute pipeline): OSRM can't see
         // bridge heights, so scan OSM maxheight/maxweight along the geometry.
         if (mode === 'truck' && route.geometry && isPro) {
-          const profile = profiles.find((p) => p.id === (vehicleId || profiles[0]?.id)) ?? profiles[0];
+          const profile = activeProfile;
           if (profile && (profile.max_height_meters || profile.gross_weight_kg)) {
             onBridgeCheck?.({ status: 'ok', findings: [], checkedAt: 0 }); // clears old; UI shows "checking"
             void checkTruckRoute(route.geometry.coordinates, {
@@ -137,7 +150,7 @@ export default function RoutePlanner({ onRoute, parkingZones, onParkingZones, on
         setLoading(false);
       }
     },
-    [originText, destinationText, mode, proParking, isPro, vehicleId, resolve, resolved, onRoute, onParkingZones, onPlanned, onBridgeCheck, profiles],
+    [originText, destinationText, mode, proParking, isPro, vehicleId, resolve, resolved, onRoute, onParkingZones, onPlanned, onBridgeCheck, profiles, planRoute],
   );
 
   return (

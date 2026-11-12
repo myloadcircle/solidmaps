@@ -30,6 +30,8 @@ export interface RouteRequest {
   destination: LatLon;
   mode: Mode;
   vehicle_id?: string;
+  /** Pro multi-stop: intermediate stops between origin and destination (max 8). */
+  waypoints?: LatLon[];
 }
 
 export interface RouteWarning {

@@ -1,0 +1,61 @@
+# SolidMaps — self-hosted Valhalla routing engine (Great Britain + Ireland)
+#
+# Valhalla ships with NO authentication of its own, so Caddy fronts it and enforces a
+# shared bearer token. The Cloudflare Worker (ROUTING_ENGINE_TOKEN) is the only intended caller.
+#
+# First run:
+#   ./scripts/fetch-extracts.sh     # download the GB + IE Geofabrik extracts into custom_files/
+#   docker compose up -d            # builds tiles on first boot (long), then serves
+#   docker compose logs -f valhalla # watch the tile build
+#
+# Full runbook + hosting shortlist: see README.md.
+
+name: solidmaps-valhalla
+
+services:
+  valhalla:
+    image: ${VALHALLA_IMAGE:-ghcr.io/valhalla/valhalla-scripted:3.9.0}
+    container_name: solidmaps-valhalla
+    restart: unless-stopped
+    environment:
+      # The scripted image builds tiles from whatever *.osm.pbf it finds in /custom_files
+      # on boot, then serves them. All state lives in that volume.
+      build_admins: "True"        # admin DB: driving side + border-crossing penalties
+      build_time_zones: "True"    # timezone DB: required for time-dependent routing
+      build_tar: "True"           # tile tarball + index: fast graph load after restarts
+      build_elevation: "False"    # only needed for /height or grade-sensitive routing
+      build_transit: "False"      # no GTFS feeds wired yet
+      serve_tiles: "True"
+      # True = reuse an existing tiles tarball and skip rebuilding.
+      # Set False for ONE restart after adding/replacing any .osm.pbf in custom_files/.
+      use_tiles_ignore_pbf: "${VALHALLA_USE_TILES_IGNORE_PBF:-True}"
+      server_threads: "${VALHALLA_THREADS:-2}"   # keep <= vCPUs; lower if the build OOMs
+      tileset_name: "valhalla_tiles"
+      traffic_name: ""            # empty = no live-traffic archive
+    volumes:
+      - ./custom_files:/custom_files
+    expose:
+      - "8002"
+    # Deliberately no host port: only Caddy should be able to reach Valhalla directly.
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: solidmaps-valhalla-proxy
+    restart: unless-stopped
+    depends_on:
+      - valhalla
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      VALHALLA_DOMAIN: ${VALHALLA_DOMAIN:?set VALHALLA_DOMAIN in .env}
+      ROUTING_ENGINE_TOKEN: ${ROUTING_ENGINE_TOKEN:?set ROUTING_ENGINE_TOKEN in .env}
+      ACME_EMAIL: ${ACME_EMAIL:?set ACME_EMAIL in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

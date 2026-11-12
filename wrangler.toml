@@ -15,5 +15,24 @@ id = "00d89c7ebeb64e118749e2522419370a"
 
 [vars]
 ALLOWED_ORIGIN = "https://solidmap.app"
-ROUTING_ENGINE_URL = "https://router.project-osrm.org"
 PMTILES_URL = "https://build.protomaps.com/20260519.pmtiles"
+
+# --- Routing engine -----------------------------------------------------------
+# Active: the OSRM public demo server (no truck restrictions, no SLA).
+ROUTING_ENGINE_URL = "https://router.project-osrm.org"
+
+# Owner's single-swap rule (2026-11-12): truck/global rollout swaps engines by
+# setting ONLY VALHALLA_BASE_URL — Stage 1 hosted Valhalla, Stage 2 the
+# self-hosted VPS (infra/valhalla/), Stage 3 a Cloudflare-fronted cluster.
+# Standard Valhalla REST: POST /route, /optimized_route, /sources_to_targets.
+# Takes priority over ROUTING_ENGINE_URL for the Valhalla adapters.
+# VALHALLA_BASE_URL = "https://valhalla.solidmap.app"
+# (set the proxy token secret first: npx wrangler secret put ROUTING_ENGINE_TOKEN)
+
+# Self-hosted Valhalla — see infra/valhalla/. Flip these two ONLY once the endpoint passes
+# the verification steps in infra/valhalla/README.md: an unreachable engine silently degrades
+# every route to a straight line. Remember to set the matching secret first:
+#   npx wrangler secret put ROUTING_ENGINE_TOKEN
+# ROUTING_ENGINE_TYPE = "valhalla"
+# ROUTING_ENGINE_URL  = "https://valhalla.solidmap.app"
+

@@ -13,26 +13,49 @@ import type {
   VehicleProfile,
   VehicleType,
 } from '../../shared/types';
+import {
+  engineWarnings,
+  parseValhallaTrip,
+  valhallaCosting,
+  valhallaTruckOptions,
+  type ValhallaResponse,
+} from '../../shared/routing';
 
 export interface Env {
   DB: D1Database;
   CACHE?: KVNamespace;
   AUTH_SECRET?: string;
+  /** OSRM-compatible engine (public demo today; self-hosted later). */
   ROUTING_ENGINE_URL?: string;
+  /** 'osrm' (default) or 'valhalla'. */
   ROUTING_ENGINE_TYPE?: string;
+  /** Bearer token for the Valhalla Caddy proxy (infra/valhalla). */
+  ROUTING_ENGINE_TOKEN?: string;
+  /**
+   * Owner's architectural rule (2026-11-12): the truck/global rollout swaps
+   * engines by changing THIS one URL — Stage 1 hosted Valhalla, Stage 2 the
+   * self-hosted VPS, Stage 3 a Cloudflare-fronted global cluster. Standard
+   * Valhalla REST only: POST /route, POST /optimized_route,
+   * POST /sources_to_targets. Falls back to ROUTING_ENGINE_URL for compat.
+   */
+  VALHALLA_BASE_URL?: string;
   PARKING_API_URL?: string;
   ALLOWED_ORIGIN?: string;
+  STRIPE_WEBHOOK_SECRET?: string;
 }
 
 const MODES: Mode[] = ['walk', 'transit', 'car', 'truck'];
 const VEHICLE_TYPES: VehicleType[] = ['car', 'van', 'hgv', 'motorcycle'];
 const FUEL_TYPES: FuelType[] = ['petrol', 'diesel', 'electric', 'hybrid', 'hydrogen', 'other'];
-const USER_AGENT = 'solidmaps-api/1.0 (https://solidmaps.app)';
+const USER_AGENT = 'solidmaps-api/1.0 (https://solidmap.app)';
 
 const ALLOWED_ORIGINS: string[] = [
   'https://solidmap.app',
   'https://www.solidmap.app',
+  'https://solidmap.xyz',
+  'https://www.solidmap.xyz',
   'https://solidmaps.pages.dev',
+  'https://solidmaps-site.pages.dev',
   'https://solidmaps-api.fbirele.workers.dev',
   'http://localhost:3000',
   'http://127.0.0.1:3000',
@@ -44,8 +67,10 @@ function allowedOrigin(request: Request, env: Env): string | null {
   // Explicit override (kept for staging/preview hosts) or the fixed allowlist.
   if (env.ALLOWED_ORIGIN && env.ALLOWED_ORIGIN !== '*' && origin === env.ALLOWED_ORIGIN) return origin;
   if (ALLOWED_ORIGINS.includes(origin)) return origin;
-  // Per-deployment preview hosts: <hash>.solidmaps.pages.dev / <branch>.solidmaps.pages.dev
-  if (/^https:\/\/[a-z0-9-]+\.solidmaps\.pages\.dev$/.test(origin)) return origin;
+  // Cloudflare Pages hosts for this project. The Pages project is named 'solidmaps-site', so its
+  // canonical host and per-deployment preview hosts carry a '-site' suffix. The older
+  // '<hash>.solidmaps.pages.dev' form is kept for compatibility.
+  if (/^https:\/\/[a-z0-9-]+\.solidmaps(-site)?\.pages\.dev$/.test(origin)) return origin;
   return null;
 }
 
@@ -174,6 +199,151 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
     subscription_tier: user.subscription_tier === 'pro' ? 'pro' : 'free',
   };
   return json(payload, 200, env);
+}
+
+function bytesToHex(buf: ArrayBuffer): string {
+  const bytes = new Uint8Array(buf);
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) out += bytes[i].toString(16).padStart(2, '0');
+  return out;
+}
+
+async function hmacHex(data: string, secret: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  );
+  return bytesToHex(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(data)));
+}
+
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/** Verify a Stripe `Stripe-Signature` header (t=,v1=) against the raw request body. */
+async function verifyStripeSignature(payload: string, header: string, secret: string): Promise<boolean> {
+  let timestamp = '';
+  const signatures: string[] = [];
+  for (const part of header.split(',')) {
+    const eq = part.indexOf('=');
+    if (eq === -1) continue;
+    const key = part.slice(0, eq);
+    const value = part.slice(eq + 1);
+    if (key === 't') timestamp = value;
+    else if (key === 'v1') signatures.push(value);
+  }
+  if (!timestamp || signatures.length === 0) return false;
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts) || Math.abs(Math.floor(Date.now() / 1000) - ts) > 300) return false;
+  const expected = await hmacHex(`${timestamp}.${payload}`, secret);
+  return signatures.some((sig) => timingSafeEqual(sig, expected));
+}
+
+interface StripeEvent {
+  id?: string;
+  type?: string;
+  data?: { object?: Record<string, unknown> };
+}
+
+async function onCheckoutCompleted(session: Record<string, unknown>, env: Env): Promise<void> {
+  const clientRef = typeof session.client_reference_id === 'string' ? session.client_reference_id : null;
+  const customerId = typeof session.customer === 'string' ? session.customer : null;
+  const subscriptionId = typeof session.subscription === 'string' ? session.subscription : null;
+  const details = session.customer_details as { email?: unknown } | undefined;
+  const email =
+    typeof session.customer_email === 'string'
+      ? session.customer_email
+      : typeof details?.email === 'string'
+        ? details.email
+        : null;
+
+  let userId: string | null = null;
+  if (clientRef) {
+    const byId = await env.DB.prepare('SELECT id FROM users WHERE id = ?')
+      .bind(clientRef)
+      .first<{ id: string }>();
+    userId = byId?.id ?? null;
+  }
+  if (!userId && email) {
+    const byEmail = await env.DB.prepare('SELECT id FROM users WHERE email = ?')
+      .bind(email.trim().toLowerCase())
+      .first<{ id: string }>();
+    userId = byEmail?.id ?? null;
+  }
+  if (!userId) {
+    console.warn('stripe checkout completed with no matching user', { clientRef, email });
+    return;
+  }
+  await env.DB.prepare(
+    `UPDATE users
+        SET subscription_tier = 'pro',
+            stripe_customer_id = COALESCE(?, stripe_customer_id),
+            stripe_subscription_id = COALESCE(?, stripe_subscription_id),
+            pro_since = COALESCE(pro_since, unixepoch())
+      WHERE id = ?`,
+  )
+    .bind(customerId, subscriptionId, userId)
+    .run();
+}
+
+async function onSubscriptionEnded(obj: Record<string, unknown>, env: Env): Promise<void> {
+  const customerId = typeof obj.customer === 'string' ? obj.customer : null;
+  if (!customerId) return;
+  await env.DB.prepare(
+    `UPDATE users
+        SET subscription_tier = 'free',
+            stripe_subscription_id = NULL
+      WHERE stripe_customer_id = ?`,
+  )
+    .bind(customerId)
+    .run();
+}
+
+/** Stripe webhook: flip Pro membership on checkout, revoke on lapse. Idempotent by event id. */
+async function handleStripeWebhook(request: Request, env: Env): Promise<Response> {
+  const secret = env.STRIPE_WEBHOOK_SECRET;
+  if (!secret) return fail('Billing is not configured', 503, env);
+  const signature = request.headers.get('Stripe-Signature') ?? '';
+  const payload = await request.text();
+  if (!(await verifyStripeSignature(payload, signature, secret))) {
+    return fail('Invalid signature', 400, env);
+  }
+  let event: StripeEvent;
+  try {
+    event = JSON.parse(payload) as StripeEvent;
+  } catch {
+    return fail('Invalid payload', 400, env);
+  }
+  const eventId = typeof event.id === 'string' ? event.id : null;
+  const type = typeof event.type === 'string' ? event.type : '';
+  if (eventId) {
+    const seen = await env.DB.prepare('SELECT id FROM stripe_events WHERE id = ?')
+      .bind(eventId)
+      .first<{ id: string }>();
+    if (seen) return json({ received: true, duplicate: true }, 200, env);
+  }
+  try {
+    const object = event.data?.object ?? {};
+    if (type === 'checkout.session.completed') await onCheckoutCompleted(object, env);
+    else if (type === 'customer.subscription.deleted' || type === 'invoice.payment_failed') {
+      await onSubscriptionEnded(object, env);
+    }
+  } catch (err) {
+    console.error('stripe webhook handler error', err);
+    return fail('Webhook handler error', 500, env);
+  }
+  if (eventId) {
+    await env.DB.prepare('INSERT OR IGNORE INTO stripe_events (id, type) VALUES (?, ?)')
+      .bind(eventId, type)
+      .run();
+  }
+  return json({ received: true }, 200, env);
 }
 
 /** Play Data safety: account + all owned records must be deletable in-app. */
@@ -315,63 +485,8 @@ function haversineM(a: LatLon, b: LatLon): number {
   return 2 * R * Math.asin(Math.sqrt(h));
 }
 
-function ulezCompliant(profile: VehicleProfile): boolean {
-  const fuel = profile.fuel_type;
-  const cls = profile.emissions_class;
-  if (!fuel || !cls) return true;
-  if (fuel === 'electric' || fuel === 'hydrogen') return true;
-  const m = cls.match(/euro\s*(\d+)/i);
-  if (!m) return true;
-  const euro = parseInt(m[1], 10);
-  return fuel === 'petrol' ? euro >= 4 : euro >= 6;
-}
-
-function vehicleWarnings(profile: VehicleProfile | null, destination: LatLon, engine: string): RouteWarning[] {
-  const warnings: RouteWarning[] = [];
-  if (!profile) return warnings;
-  const enforced = engine === 'valhalla';
-  if (profile.max_height_meters) {
-    warnings.push({
-      type: 'bridge',
-      title: `Height limit ${profile.max_height_meters}m active`,
-      detail: enforced
-        ? 'Bridge clearance is respected where OpenStreetMap data includes it.'
-        : 'This engine cannot enforce height limits — check bridge clearances manually.',
-      point: destination,
-    });
-  }
-  if (profile.gross_weight_kg) {
-    warnings.push({
-      type: 'info',
-      title: `Weight limit ${profile.gross_weight_kg}kg active`,
-      detail: enforced
-        ? 'Weight restrictions are respected where OpenStreetMap data includes them.'
-        : 'This engine cannot enforce weight limits — check restrictions manually.',
-      point: destination,
-    });
-  }
-  if (!ulezCompliant(profile)) {
-    warnings.push({
-      type: 'ulez',
-      title: 'ULEZ Zone Ahead',
-      detail: `${profile.fuel_type ?? 'unknown fuel'} ${profile.emissions_class ?? 'unknown class'} is not ULEZ-compliant — check the zone boundary before entering.`,
-      point: destination,
-    });
-  }
-  return warnings;
-}
-
-function engineWarnings(profile: VehicleProfile | null, destination: LatLon, engine: string, mode: Mode): RouteWarning[] {
-  const warnings = vehicleWarnings(profile, destination, engine);
-  if (mode === 'transit') {
-    warnings.unshift({
-      type: 'info',
-      title: 'Transit not available',
-      detail: 'This routing engine has no transit data — showing a walking route instead.',
-    });
-  }
-  return warnings;
-}
+// Warning derivation (`engineWarnings`, `vehicleWarnings`, `ulezCompliant`) lives in
+// shared/routing.ts so the Worker and the on-device WebAssembly engine stay identical.
 
 function haversineRoute(origin: LatLon, destination: LatLon, mode: Mode, warnings: RouteWarning[]): RouteResponse {
   const distance = haversineM(origin, destination);
@@ -394,34 +509,6 @@ function haversineRoute(origin: LatLon, destination: LatLon, mode: Mode, warning
     warnings,
     commercial: mode === 'truck',
   };
-}
-
-function decodePolyline6(str: string): [number, number][] {
-  let lat = 0;
-  let lon = 0;
-  let i = 0;
-  const out: [number, number][] = [];
-  while (i < str.length) {
-    let b: number;
-    let shift = 0;
-    let result = 0;
-    do {
-      b = str.charCodeAt(i++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    lat += (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
-    shift = 0;
-    result = 0;
-    do {
-      b = str.charCodeAt(i++) - 63;
-      result |= (b & 0x1f) << shift;
-      shift += 5;
-    } while (b >= 0x20);
-    lon += (result & 1) !== 0 ? ~(result >> 1) : result >> 1;
-    out.push([lon / 1e6, lat / 1e6]);
-  }
-  return out;
 }
 
 function osrmInstruction(step: { maneuver: { type: string; modifier?: string; exit?: number }; name?: string }): string {
@@ -510,14 +597,48 @@ async function osrmRoute(
   };
 }
 
-interface ValhallaResponse {
-  trip?: {
-    legs?: {
-      shape: string;
-      summary?: { length: number; time: number };
-      maneuvers?: { instruction: string; length?: number }[];
-    }[];
+/** Resolved Valhalla base URL per the owner's single-swap rule. */
+function valhallaBaseUrl(env: Env): string | null {
+  const raw = env.VALHALLA_BASE_URL ?? (env.ROUTING_ENGINE_TYPE === 'valhalla' ? env.ROUTING_ENGINE_URL : null);
+  return raw ? raw.replace(/\/+$/, '') : null;
+}
+
+/** Standard Valhalla REST POST with the proxy token attached. */
+async function valhallaRequest(env: Env, path: string, body: Record<string, unknown>): Promise<ValhallaResponse> {
+  const base = valhallaBaseUrl(env);
+  if (!base) throw new ApiError(502, 'No Valhalla endpoint configured');
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'User-Agent': USER_AGENT,
   };
+  if (env.ROUTING_ENGINE_TOKEN) headers.Authorization = `Bearer ${env.ROUTING_ENGINE_TOKEN}`;
+  const res = await fetch(`${base}${path}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new ApiError(502, `Valhalla ${path} error`);
+  return (await res.json()) as ValhallaResponse;
+}
+
+function valhallaBody(
+  locations: LatLon[],
+  mode: Mode,
+  profile: VehicleProfile | null,
+): Record<string, unknown> {
+  const costing = valhallaCosting(mode);
+  const body: Record<string, unknown> = {
+    locations: locations.map((l) => ({ lat: l.lat, lon: l.lon })),
+    costing,
+    // Kilometres is Valhalla's default but pin it explicitly: shared parsing assumes it.
+    units: 'kilometers',
+    directions_options: { units: 'kilometers', language: 'en-GB' },
+  };
+  if (costing === 'truck') {
+    const options = valhallaTruckOptions(profile);
+    if (options) body.costing_options = { truck: options };
+  }
+  return body;
 }
 
 async function valhallaRoute(
@@ -527,41 +648,47 @@ async function valhallaRoute(
   profile: VehicleProfile | null,
   env: Env,
 ): Promise<RouteResponse> {
-  const costing = mode === 'walk' || mode === 'transit' ? 'pedestrian' : mode === 'truck' ? 'truck' : 'auto';
-  const body: Record<string, unknown> = {
-    locations: [
-      { lat: origin.lat, lon: origin.lon },
-      { lat: destination.lat, lon: destination.lon },
-    ],
-    costing,
-  };
-  if (costing === 'truck' && profile) {
-    const opts: Record<string, number> = {};
-    if (profile.max_height_meters) opts.height = profile.max_height_meters;
-    if (profile.gross_weight_kg) opts.weight = Math.round((profile.gross_weight_kg / 1000) * 10) / 10;
-    if (profile.axle_count) opts.axle_count = profile.axle_count;
-    if (Object.keys(opts).length > 0) body.costing_options = { truck: opts };
-  }
-  const base = env.ROUTING_ENGINE_URL!.replace(/\/+$/, '');
-  const res = await fetch(`${base}/route`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new ApiError(502, 'Routing engine error');
-  const data = (await res.json()) as ValhallaResponse;
-  const leg = data.trip?.legs?.[0];
-  if (!leg || !leg.shape) throw new ApiError(502, 'Routing engine returned no route');
-  const steps: RouteStep[] = (leg.maneuvers ?? [])
-    .filter((m) => m.instruction)
-    .map((m) => ({ instruction: m.instruction, distance_meters: Math.round((m.length ?? 0) * 1000) }));
+  const data = await valhallaRequest(env, '/route', valhallaBody([origin, destination], mode, profile));
+  const parsed = parseValhallaTrip(data.trip);
+  if (parsed.coordinates.length === 0) throw new ApiError(502, 'Routing engine returned no route');
   return {
     provider: 'valhalla',
     mode,
-    distance_meters: Math.round((leg.summary?.length ?? 0) * 1000),
-    duration_seconds: Math.round(leg.summary?.time ?? 0),
-    geometry: { coordinates: decodePolyline6(leg.shape) },
-    steps,
+    distance_meters: parsed.distance_meters,
+    duration_seconds: parsed.duration_seconds,
+    geometry: { coordinates: parsed.coordinates },
+    steps: parsed.steps,
+    warnings: engineWarnings(profile, destination, 'valhalla', mode),
+    commercial: mode === 'truck',
+  };
+}
+
+/**
+ * Pro multi-stop: Valhalla /optimized_route orders the waypoints and returns one
+ * leg per segment. Same response contract as the single-leg route.
+ */
+async function valhallaOptimizedRoute(
+  origin: LatLon,
+  waypoints: LatLon[],
+  destination: LatLon,
+  mode: Mode,
+  profile: VehicleProfile | null,
+  env: Env,
+): Promise<RouteResponse> {
+  const locations = [origin, ...waypoints, destination];
+  const data = await valhallaRequest(env, '/optimized_route', {
+    ...valhallaBody(locations, mode, profile),
+    optimize: false,
+  });
+  const parsed = parseValhallaTrip(data.trip);
+  if (parsed.coordinates.length === 0) throw new ApiError(502, 'Routing engine returned no route');
+  return {
+    provider: 'valhalla',
+    mode,
+    distance_meters: parsed.distance_meters,
+    duration_seconds: parsed.duration_seconds,
+    geometry: { coordinates: parsed.coordinates },
+    steps: parsed.steps,
     warnings: engineWarnings(profile, destination, 'valhalla', mode),
     commercial: mode === 'truck',
   };
@@ -588,8 +715,78 @@ async function routeWithEngine(
     return await osrmRoute(origin, destination, mode, profile, env);
   } catch (err) {
     if (!(err instanceof ApiError) || err.status !== 502) throw err;
+    // Chain: Valhalla down → OSRM (if configured) → haversine. Stage-1 testing
+    // stays usable while the VPS rebuilds; Stage-3 clusters fail over cleanly.
+    if (engineType === 'valhalla' && env.ROUTING_ENGINE_URL) {
+      try {
+        const osrm = await osrmRoute(origin, destination, mode, profile, env);
+        return {
+          ...osrm,
+          warnings: [
+            ...osrm.warnings,
+            {
+              type: 'info' as const,
+              title: 'Truck engine unavailable',
+              detail: 'Valhalla is unreachable — truck restrictions are advisory on this fallback route.',
+            },
+          ],
+        };
+      } catch {
+        // fall through to haversine
+      }
+    }
     return fallback('The routing engine is unreachable — showing a direct line instead.');
   }
+}
+
+/** Valhalla /sources_to_targets matrix → simple seconds/metres grid. */
+async function handleMatrix(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return fail('Authentication required', 401, env);
+  const body = (await request.json().catch(() => null)) as
+    | { sources?: LatLon[]; targets?: LatLon[]; mode?: Mode }
+    | null;
+  const sources = (body?.sources ?? []).filter(validLatLon).slice(0, 25);
+  const targets = (body?.targets ?? []).filter(validLatLon).slice(0, 25);
+  if (sources.length === 0 || targets.length === 0) {
+    return fail('sources and targets arrays (1–25 valid points each) are required', 400, env);
+  }
+  const mode: Mode = MODES.includes(body?.mode as Mode) ? (body!.mode as Mode) : 'truck';
+  if (mode === 'truck' && user.subscription_tier !== 'pro') {
+    return fail('Truck matrix requires a Pro subscription', 403, env);
+  }
+  if (!valhallaBaseUrl(env)) return fail('No Valhalla endpoint configured', 503, env);
+  const costing = valhallaCosting(mode);
+  const payload: Record<string, unknown> = {
+    sources: sources.map((l) => ({ lat: l.lat, lon: l.lon })),
+    targets: targets.map((l) => ({ lat: l.lat, lon: l.lon })),
+    costing,
+    units: 'kilometers',
+  };
+  if (costing === 'truck') {
+    // Profile-less truck matrix: enforce only the OSM graph's own restrictions.
+  }
+  const data = await valhallaRequest(env, '/sources_to_targets', payload);
+  interface MatrixCell { time?: number; distance?: number; to?: number; from?: number }
+  const raw = (data as unknown as { sources_to_targets?: MatrixCell[][] | MatrixCell[] }).sources_to_targets;
+  const flat = Array.isArray(raw?.[0]) ? (raw as MatrixCell[][]) : [ (raw as MatrixCell[]) ?? [] ];
+  const matrix = sources.map((_, si) => {
+    const row = flat[si] ?? [];
+    return targets.map((_, ti) => ({
+      duration_seconds: row[ti]?.time != null ? Math.round(row[ti].time!) : null,
+      distance_meters: row[ti]?.distance != null ? Math.round(row[ti].distance! * 1000) : null,
+    }));
+  });
+  return json(
+    {
+      sources: sources.length,
+      targets: targets.length,
+      mode,
+      matrix,
+    },
+    200,
+    env,
+  );
 }
 
 async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -614,9 +811,15 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
     profile = normalizeProfile(row);
   }
 
-  // Short-lived KV cache (5 min) to spare the public routing demo servers.
+  // Pro multi-stop: intermediate stops ride Valhalla /optimized_route.
+  const waypoints = (body.waypoints ?? []).filter(validLatLon).slice(0, 8);
+  if (waypoints.length > 0 && tier !== 'pro') {
+    return fail('Multi-stop routing requires a Pro subscription', 403, env);
+  }
+  // Cache key covers the full stop list so multi-stop responses never collide.
   const r4 = (n: number) => n.toFixed(4);
-  const routeKey = `route:${r4(origin.lat)},${r4(origin.lon)};${r4(destination.lat)},${r4(destination.lon)};${mode};${body.vehicle_id ?? 'anon'}`;
+  const stopsKey = waypoints.map((w) => `${r4(w.lat)},${r4(w.lon)}`).join('|');
+  const routeKey = `route:${r4(origin.lat)},${r4(origin.lon)};${stopsKey};${r4(destination.lat)},${r4(destination.lon)};${mode};${body.vehicle_id ?? 'anon'}`;
   if (env.CACHE) {
     const cached = await env.CACHE.get(routeKey);
     if (cached) {
@@ -626,11 +829,54 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
       });
     }
   }
-  const result = await routeWithEngine(origin, destination, mode, profile, env);
+  const result =
+    waypoints.length > 0
+      ? await routeWithStops(origin, waypoints, destination, mode, profile, env)
+      : await routeWithEngine(origin, destination, mode, profile, env);
   if (env.CACHE) {
     ctx.waitUntil(env.CACHE.put(routeKey, JSON.stringify(result), { expirationTtl: 300 }).catch(() => {}));
   }
   return json(result, 200, env);
+}
+
+/** Engine dispatch for multi-stop routes (Valhalla only; OSRM has no optimizer). */
+async function routeWithStops(
+  origin: LatLon,
+  waypoints: LatLon[],
+  destination: LatLon,
+  mode: Mode,
+  profile: VehicleProfile | null,
+  env: Env,
+): Promise<RouteResponse> {
+  if (valhallaBaseUrl(env)) {
+    return valhallaOptimizedRoute(origin, waypoints, destination, mode, profile, env);
+  }
+  // No Valhalla configured: chain the stops through the point-to-point engine
+  // so multi-stop still works (unoptimized order) before the engine ships.
+  const legs: RouteResponse[] = [];
+  let prev = origin;
+  for (const stop of [...waypoints, destination]) {
+    legs.push(await routeWithEngine(prev, stop, mode, profile, env));
+    prev = stop;
+  }
+  const coordinates = legs.flatMap((l) => l.geometry?.coordinates ?? []);
+  const steps = legs.flatMap((l, i) =>
+    (i === legs.length - 1 ? l.steps : l.steps.slice(0, -1)).map((s) => ({
+      ...s,
+      distance_from_start: undefined,
+    })),
+  );
+  const base = legs.every((l) => l.provider === 'valhalla');
+  return {
+    provider: base ? 'valhalla' : legs[0].provider,
+    mode,
+    distance_meters: legs.reduce((a, l) => a + l.distance_meters, 0),
+    duration_seconds: legs.reduce((a, l) => a + l.duration_seconds, 0),
+    geometry: { coordinates },
+    steps,
+    warnings: legs[0].warnings,
+    commercial: mode === 'truck',
+  };
 }
 
 type VehicleProfileRow = Omit<VehicleProfile, 'id' | 'user_id'> & { id: string; user_id: string; created_at?: number };
@@ -913,7 +1159,9 @@ export default {
       else if (seg[1] === 'parking' && request.method === 'GET') inner = await handleParking(url, env, ctx);
       else if (seg[1] === 'vehicle-profile' && request.method === 'GET') inner = await handleVehicleProfileList(request, env);
       else if (seg[1] === 'vehicle-profile' && request.method === 'POST') inner = await handleVehicleProfileCreate(request, env);
+      else if (seg[1] === 'matrix' && request.method === 'POST') inner = await handleMatrix(request, env);
       else if (seg[1] === 'tiles' && request.method === 'GET') inner = await handleTiles(url, env, ctx);
+      else if (seg[1] === 'stripe' && seg[2] === 'webhook' && request.method === 'POST') inner = await handleStripeWebhook(request, env);
       else inner = fail('Not found', 404, env);
       return withCors(inner, request, env);
     } catch (err) {

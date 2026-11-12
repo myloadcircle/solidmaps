@@ -1,0 +1,27 @@
+# SolidMaps Valhalla edge proxy.
+#
+# Valhalla has no auth of its own, so this Caddy instance:
+#   1. terminates TLS (automatic Let's Encrypt for $VALHALLA_DOMAIN), and
+#   2. rejects anything that does not carry the exact bearer token the Worker sends.
+#
+# Only /route (the router) and /status (health) are reachable.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$VALHALLA_DOMAIN} {
+	encode gzip
+	log
+
+	# `route` preserves the written order of these directives (no implicit re-sorting).
+	route {
+		@blocked not path /route /status
+		respond @blocked 404
+
+		@unauthorized `{http.request.header.Authorization} != "Bearer {$ROUTING_ENGINE_TOKEN}"`
+		respond @unauthorized 401
+
+		reverse_proxy valhalla:8002
+	}
+}

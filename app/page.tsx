@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type * as maplibregl from 'maplibre-gl';
+import type { MapView } from '@/components/SolidMap';
 import RoutePlanner from '@/components/RoutePlanner';
 import ActiveNavigation from '@/components/ActiveNavigation';
 import VehicleProfileManager from '@/components/VehicleProfileManager';
@@ -15,7 +15,7 @@ import type { LatLon, Mode, ParkingZone, RouteResponse } from '@/shared/types';
 const SolidMap = dynamic(() => import('@/components/SolidMap').then((m) => m.SolidMap), { ssr: false });
 
 export default function Home() {
-  const { user, login, logout, loading } = useAuth();
+  const { user, login, logout, loading, refresh } = useAuth();
   const [route, setRoute] = useState<RouteResponse | null>(null);
   const [bridgeCheck, setBridgeCheck] = useState<BridgeCheck | null>(null);
   const [parkingZones, setParkingZones] = useState<ParkingZone[]>([]);
@@ -24,7 +24,8 @@ export default function Home() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const mapRef = useRef<maplibregl.Map | null>(null);
+  const [proToast, setProToast] = useState(false);
+  const mapRef = useRef<MapView | null>(null);
   const lastPlanRef = useRef<{ origin: LatLon; destination: LatLon; mode: Mode; vehicle_id?: string } | null>(null);
 
   const finishOnboarding = useCallback(() => setShowOnboarding(false), []);
@@ -36,7 +37,19 @@ export default function Home() {
     return () => clearTimeout(t);
   }, []);
 
-  const handleMapReady = useCallback((map: maplibregl.Map) => {
+  // Returning from Stripe checkout: confirm the membership landed, then clean the URL.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('upgrade') !== 'success') return;
+    refresh().then((next) => {
+      if (next?.subscription_tier === 'pro') setProToast(true);
+    });
+    params.delete('upgrade');
+    const qs = params.toString();
+    window.history.replaceState({}, '', `${window.location.pathname}${qs ? `?${qs}` : ''}`);
+  }, [refresh]);
+
+  const handleMapReady = useCallback((map: MapView) => {
     mapRef.current = map;
   }, []);
 
@@ -142,6 +155,22 @@ export default function Home() {
           )}
         </div>
       </header>
+
+      {proToast && (
+        <div
+          role="status"
+          className="absolute left-1/2 top-16 z-40 flex w-[calc(100%-2rem)] max-w-sm -translate-x-1/2 items-center gap-2 rounded-xl border border-emerald-500/50 bg-slate-900/95 p-3 text-xs text-emerald-200 shadow-xl backdrop-blur"
+        >
+          <span className="flex-1">You&rsquo;re Pro — truck routing and vehicle profiles are unlocked.</span>
+          <button
+            onClick={() => setProToast(false)}
+            aria-label="Close"
+            className="px-1 text-emerald-200/60 hover:text-emerald-100"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {notice && (
         <div

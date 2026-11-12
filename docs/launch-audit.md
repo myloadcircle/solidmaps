@@ -70,7 +70,7 @@ third-party latency — already mitigated by the raster fallback. No launch-bloc
 |---|---|---|
 | Tile/network blocked | Auto-switch to raster; if that also fails → terminal honest toast + Retry; planner untouched | **Observed live** in webview; terminal state added after observing the stuck toast |
 | No GPS | Inline "GPS: …" message; manual stepping continues | **Observed live** |
-| WebGL2 missing | Up-front feature gate; honest message; planner works | Code-verified (cannot disable WebGL in this webview) |
+| WebGL2 missing | Drops to the Leaflet raster tier — no GPU needed; honest "Lightweight map mode" notice; routing, parking and turn-by-turn unaffected | **Observed live** on production with `getContext('webgl2')` stubbed to `null`: Leaflet container, no MapLibre canvas, 24/24 raster tiles at 256px |
 | Routing engine down | Haversine fallback + amber banner (no fake routes) | Code-verified + API 502 path tested earlier |
 | Parking provider down | D1 seed fallback | Code-verified |
 | Login failure | Inline "Sign-in failed" in header form | Code-verified pattern |

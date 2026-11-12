@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { Protocol, PMTiles } from 'pmtiles';
 import type { GeoJSON } from 'geojson';
 import { API_BASE } from '@/lib/api';
@@ -10,6 +12,12 @@ import type { ParkingZone, RouteResponse } from '@/shared/types';
 
 const protocol = new Protocol();
 maplibregl.addProtocol('pmtiles', protocol.tile);
+
+// MapLibre 6 derives its worker URL from `import.meta.url`, which the bundler bakes to a
+// build-machine file path. The shipped bundle then asks for a worker at "" and reports "Worker
+// failed to load", so the vector style never renders and every user silently drops to raster.
+// Point it at the copy we ship in /public (see scripts/sync-maplibre-worker.mjs).
+maplibregl.setWorkerUrl('/maplibre-gl-worker.js');
 
 const PMTILES_URL = process.env.NEXT_PUBLIC_PMTILES_URL || '';
 const MAP_STYLE = process.env.NEXT_PUBLIC_MAP_STYLE || '';
@@ -19,12 +27,28 @@ if (PMTILES_URL) {
   protocol.add(new PMTiles(PMTILES_URL));
 }
 
+/**
+ * The slice of a map engine the app actually drives. MapLibre's Map satisfies this as-is;
+ * the WebGL-free Leaflet tier implements it, so ActiveNavigation can follow the vehicle
+ * on either engine.
+ */
+export interface MapView {
+  easeTo(options: {
+    center: [number, number];
+    zoom: number;
+    bearing?: number;
+    pitch?: number;
+    duration?: number;
+  }): void;
+  getBearing(): number;
+}
+
 interface SolidMapProps {
   route?: RouteResponse | null;
   parkingZones?: ParkingZone[];
   initialCenter?: [number, number];
   initialZoom?: number;
-  onMapReady?: (map: maplibregl.Map) => void;
+  onMapReady?: (map: MapView) => void;
 }
 
 function baseStyle(): string | maplibregl.StyleSpecification {
@@ -156,13 +180,17 @@ export const SolidMap: React.FC<SolidMapProps> = ({
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<maplibregl.Map | null>(null);
   const markersRef = useRef<maplibregl.Marker[]>([]);
+  // WebGL-free tier. Only one engine is ever live at a time — which one is decided once, on mount.
+  const leafletMapRef = useRef<L.Map | null>(null);
+  const leafletMarkersRef = useRef<L.Marker[]>([]);
   const loadedRef = useRef(false);
   const fallbackTriedRef = useRef(false);
   const routeRef = useRef(route);
   const parkingRef = useRef(parkingZones);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [errorState, setErrorState] = useState<string | null>(null);
-  const [fatalWebgl, setFatalWebgl] = useState(false);
+  // Set when the browser has no WebGL2: we drop to the Leaflet raster tier rather than show no map.
+  const [webglFree, setWebglFree] = useState(false);
   const [errorDismissed, setErrorDismissed] = useState(false);
   const [mapKey, setMapKey] = useState(0);
   routeRef.current = route;
@@ -177,13 +205,41 @@ export const SolidMap: React.FC<SolidMapProps> = ({
   };
 
   useEffect(() => {
-    if (!mapContainerRef.current || mapInstanceRef.current) return;
+    if (!mapContainerRef.current || mapInstanceRef.current || leafletMapRef.current) return;
     if (!webgl2Supported()) {
-      setFatalWebgl(true);
+      // MapLibre cannot start without WebGL2, so render raster tiles with Leaflet, which
+      // needs no GPU. Route, parking and turn-by-turn all keep working.
+      const container = mapContainerRef.current;
+      container.innerHTML = '';
+      const leafletMap = new L.Map(container, {
+        center: [initialCenter[1], initialCenter[0]],
+        zoom: initialZoom,
+        zoomControl: true,
+      });
+      // Match the MapLibre tier: no engine name in the chrome, just the data attribution.
+      leafletMap.attributionControl.setPrefix(false);
+      L.tileLayer(`${API_BASE}/tiles/{z}/{x}/{y}`, {
+        tileSize: 256,
+        maxZoom: 19,
+        attribution: '© OpenStreetMap contributors',
+      }).addTo(leafletMap);
+      leafletMapRef.current = leafletMap;
+      loadedRef.current = true;
+      setWebglFree(true);
+      setMapLoaded(true);
       setErrorState(
-        'This browser cannot render maps (WebGL2 unavailable). Route planning and directions below still work fully.',
+        'Showing the lightweight map: this browser has no WebGL2, so the vector map is off. Routing, parking and turn-by-turn still work.',
       );
-      return;
+      drawRouteLeaflet(leafletMap, routeRef.current);
+      drawParkingLeaflet(leafletMap, parkingRef.current, leafletMarkersRef.current);
+      onMapReady?.(leafletView(leafletMap));
+      return () => {
+        leafletMarkersRef.current.forEach((m) => m.remove());
+        leafletMarkersRef.current = [];
+        leafletMap.remove();
+        leafletMapRef.current = null;
+        loadedRef.current = false;
+      };
     }
     mapContainerRef.current.innerHTML = '';
     let map: maplibregl.Map;
@@ -291,24 +347,31 @@ export const SolidMap: React.FC<SolidMapProps> = ({
   }, [mapKey]);
 
   useEffect(() => {
+    const leafletMap = leafletMapRef.current;
+    if (leafletMap) {
+      drawRouteLeaflet(leafletMap, route);
+      return;
+    }
     const map = mapInstanceRef.current;
     if (map && map.loaded()) drawRoute(map, route);
   }, [route]);
 
   useEffect(() => {
+    const leafletMap = leafletMapRef.current;
+    if (leafletMap) {
+      drawParkingLeaflet(leafletMap, parkingZones, leafletMarkersRef.current);
+      return;
+    }
     const map = mapInstanceRef.current;
     if (map && map.loaded()) drawParking(map, parkingZones, markersRef.current);
   }, [parkingZones]);
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-gray-950">
-      {fatalWebgl ? (
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_center,#1e293b_0%,#0f172a_70%)]" aria-hidden="true" />
-      ) : (
-        <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" aria-label="Map" />
-      )}
+      {/* One container for both tiers: MapLibre when WebGL2 is present, Leaflet when it is not. */}
+      <div ref={mapContainerRef} className="absolute inset-0 h-full w-full" aria-label="Map" />
 
-      {!mapLoaded && !errorState && !fatalWebgl && (
+      {!mapLoaded && !errorState && (
         <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-900/80 font-mono text-sm text-white backdrop-blur-sm">
           <div className="flex items-center space-x-3">
             <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
@@ -326,11 +389,11 @@ export const SolidMap: React.FC<SolidMapProps> = ({
             <span aria-hidden="true" className="mt-0.5 text-base leading-none">⚠️</span>
             <div className="flex-1">
               <p className="font-semibold text-amber-100">
-                {fatalWebgl ? 'Maps unavailable in this browser' : 'Map issue'}
+                {webglFree ? 'Lightweight map mode' : 'Map issue'}
               </p>
               <p className="mt-1 leading-relaxed text-amber-200/90">{errorState}</p>
               <div className="mt-2.5 flex gap-2">
-                {!fatalWebgl && (
+                {!webglFree && (
                   <button
                     onClick={retry}
                     className="rounded-lg bg-amber-500/20 px-3 py-1.5 font-semibold text-amber-100 hover:bg-amber-500/30"
@@ -400,6 +463,49 @@ function drawParking(map: maplibregl.Map, zones: ParkingZone[], markers: maplibr
       new maplibregl.Marker(el)
         .setLngLat([z.lon, z.lat])
         .setPopup(new maplibregl.Popup({ offset: 24 }).setText(z.name))
+        .addTo(map),
+    );
+  }
+}
+
+/** Adapts Leaflet's camera to the MapView contract ActiveNavigation drives. Leaflet has no
+ *  bearing or pitch, so those are accepted and ignored rather than throwing mid-navigation. */
+function leafletView(map: L.Map): MapView {
+  return {
+    easeTo: ({ center, zoom, duration }) => {
+      map.flyTo([center[1], center[0]], zoom, { duration: (duration ?? 800) / 1000 });
+    },
+    getBearing: () => 0,
+  };
+}
+
+const leafletRouteLayers = new WeakMap<L.Map, L.LayerGroup>();
+
+function drawRouteLeaflet(map: L.Map, route: RouteResponse | null): void {
+  leafletRouteLayers.get(map)?.remove();
+  leafletRouteLayers.delete(map);
+  const coordinates = route?.geometry?.coordinates ?? [];
+  if (coordinates.length === 0) return;
+  // GeoJSON is [lon, lat]; Leaflet wants [lat, lng].
+  const latlngs = coordinates.map((c) => [c[1], c[0]] as [number, number]);
+  const group = L.layerGroup([
+    L.polyline(latlngs, { color: '#0c4a6e', weight: 9, opacity: 0.6, lineJoin: 'round', lineCap: 'round' }),
+    L.polyline(latlngs, { color: '#38bdf8', weight: 5, lineJoin: 'round', lineCap: 'round' }),
+  ]).addTo(map);
+  leafletRouteLayers.set(map, group);
+  map.fitBounds(L.latLngBounds(latlngs), { padding: [80, 80], maxZoom: 15 });
+}
+
+function drawParkingLeaflet(map: L.Map, zones: ParkingZone[], markers: L.Marker[]): void {
+  markers.forEach((m) => m.remove());
+  markers.length = 0;
+  for (const z of zones) {
+    const el = document.createElement('div');
+    el.className = 'rounded border border-white bg-blue-600 px-1.5 py-0.5 text-xs font-bold text-white shadow';
+    el.textContent = 'P';
+    markers.push(
+      L.marker([z.lat, z.lon], { icon: L.divIcon({ html: el, className: '', iconSize: [22, 18] }) })
+        .bindPopup(z.name)
         .addTo(map),
     );
   }
