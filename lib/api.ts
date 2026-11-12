@@ -50,6 +50,12 @@ export const api = {
       body: JSON.stringify({ email }),
     }),
   getUser: () => request<User>('/auth/me'),
+  /** Claim SolidMaps Pro with an active TruckRoute (RevenueCat) subscription. */
+  exchangeTruckroute: (appUserId: string) =>
+    request<{ upgraded: boolean; pro_until: number | null; source: string }>('/entitlement/revcat', {
+      method: 'POST',
+      body: JSON.stringify({ app_user_id: appUserId }),
+    }),
   deleteAccount: () =>
     request<{ deleted: boolean }>('/auth/account', { method: 'DELETE' }),
   geocode: (q: string) => request<GeocodeResult[]>(`/geocode?q=${encodeURIComponent(q)}`),

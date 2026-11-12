@@ -42,6 +42,8 @@ export interface Env {
   PARKING_API_URL?: string;
   ALLOWED_ORIGIN?: string;
   STRIPE_WEBHOOK_SECRET?: string;
+  /** RevenueCat secret API key (sk_…) for TruckRoute Pro entitlement validation. Owner mints. */
+  REVCAT_SECRET_KEY?: string;
 }
 
 const MODES: Mode[] = ['walk', 'transit', 'car', 'truck'];
@@ -149,16 +151,46 @@ interface UserRow {
   subscription_tier: string;
 }
 
-async function authUser(request: Request, env: Env): Promise<UserRow | null> {
-  const header = request.headers.get('Authorization') ?? '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+/** Pro expiry is honoured softly: an expired member reads as free without downgrading the row, so renewals re-flip it. */
+function resolveTier(row: { subscription_tier: string; pro_until: number | null }): 'free' | 'pro' {
+  if (row.subscription_tier !== 'pro') return 'free';
+  if (row.pro_until != null && row.pro_until > 0 && row.pro_until * 1000 < Date.now()) return 'free';
+  return 'pro';
+}
+
+async function authUser(request: Request, env: Env): Promise<(UserRow & { pro_until: number | null }) | null> {
+  const token = (request.headers.get('Authorization') ?? '').startsWith('Bearer ')
+    ? request.headers.get('Authorization')!.slice(7)
+    : null;
   if (!token) return null;
   const userId = await verifyToken(token, env);
   if (!userId) return null;
-  const row = await env.DB.prepare('SELECT id, email, subscription_tier FROM users WHERE id = ?')
+  return await env.DB.prepare('SELECT id, email, subscription_tier, pro_until FROM users WHERE id = ?')
     .bind(userId)
-    .first<UserRow>();
-  return row ?? null;
+    .first<UserRow & { pro_until: number | null }>();
+}
+
+/**
+ * Estate service keys: TruckRoute (and future products) call the engine without a
+ * SolidMaps account. KV svc:{key} -> {app, tier}. Minted by the lane; revocable by
+ * deleting the KV key.
+ */
+interface ServiceKey {
+  app: string;
+  tier: 'pro' | 'engine';
+}
+
+async function serviceKeyAuth(request: Request, env: Env): Promise<ServiceKey | null> {
+  const key = request.headers.get('X-API-Key');
+  if (!key || !env.CACHE) return null;
+  const raw = await env.CACHE.get('svc:' + key);
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as ServiceKey;
+    return parsed.app && parsed.tier ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -742,7 +774,8 @@ async function routeWithEngine(
 /** Valhalla /sources_to_targets matrix → simple seconds/metres grid. */
 async function handleMatrix(request: Request, env: Env): Promise<Response> {
   const user = await authUser(request, env);
-  if (!user) return fail('Authentication required', 401, env);
+  const svc = await serviceKeyAuth(request, env);
+  if (!user && !svc) return fail('Authentication required', 401, env);
   const body = (await request.json().catch(() => null)) as
     | { sources?: LatLon[]; targets?: LatLon[]; mode?: Mode }
     | null;
@@ -752,7 +785,8 @@ async function handleMatrix(request: Request, env: Env): Promise<Response> {
     return fail('sources and targets arrays (1–25 valid points each) are required', 400, env);
   }
   const mode: Mode = MODES.includes(body?.mode as Mode) ? (body!.mode as Mode) : 'truck';
-  if (mode === 'truck' && user.subscription_tier !== 'pro') {
+  const pro = (user && resolveTier(user) === 'pro') || svc?.tier === 'pro';
+  if (mode === 'truck' && !pro) {
     return fail('Truck matrix requires a Pro subscription', 403, env);
   }
   if (!valhallaBaseUrl(env)) return fail('No Valhalla endpoint configured', 503, env);
@@ -789,6 +823,42 @@ async function handleMatrix(request: Request, env: Env): Promise<Response> {
   );
 }
 
+/**
+ * TruckRoute Pro -> SolidMaps Pro bridge. A signed-in SolidMaps user submits the RevenueCat
+ * app_user_id their TruckRoute subscription lives under; the worker validates it server-side
+ * against RevenueCat and flips the SolidMaps tier. Expiry mirrors the RC entitlement date.
+ */
+async function handleRevCatExchange(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  if (!user) return fail('Authentication required', 401, env);
+  if (!env.REVCAT_SECRET_KEY) return fail('TruckRoute Pro exchange is not configured yet', 503, env);
+  const body = (await request.json().catch(() => null)) as { app_user_id?: string } | null;
+  const appUserId = body?.app_user_id?.trim();
+  if (!appUserId || appUserId.length > 256) return fail('A TruckRoute account ID is required', 400, env);
+  const res = await fetch(
+    'https://api.revenuecat.com/v1/subscribers/' + encodeURIComponent(appUserId) + '/active_entitlements',
+    { headers: { Authorization: 'Bearer ' + env.REVCAT_SECRET_KEY, Accept: 'application/json' } },
+  );
+  if (res.status === 404) {
+    return fail('No TruckRoute subscription found for that account ID', 404, env);
+  }
+  if (!res.ok) return fail('Could not validate the TruckRoute subscription right now', 502, env);
+  const data = (await res.json()) as {
+    subscriber?: { entitlements?: Record<string, { expires_date?: string }> };
+  };
+  const ents = data.subscriber?.entitlements ?? {};
+  const entry = Object.entries(ents).find(([id]) => id.toLowerCase().includes('pro')) ??
+    (Object.keys(ents).length > 0 ? Object.entries(ents)[0] : null);
+  if (!entry) return fail('TruckRoute Pro is not active for that account ID', 404, env);
+  const expires = entry[1].expires_date ? Math.floor(new Date(entry[1].expires_date).getTime() / 1000) : null;
+  await env.DB.prepare(
+    "UPDATE users SET subscription_tier = 'pro', pro_until = COALESCE(?, pro_until) WHERE id = ?"
+  )
+    .bind(expires, user.id)
+    .run();
+  return json({ upgraded: true, pro_until: expires, source: 'truckroute' }, 200, env);
+}
+
 async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const body = (await request.json().catch(() => null)) as RouteRequest | null;
   if (!body || !validLatLon(body.origin) || !validLatLon(body.destination) || !MODES.includes(body.mode)) {
@@ -796,7 +866,9 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
   }
   const { origin, destination, mode } = body;
   const user = await authUser(request, env);
-  const tier: SubscriptionTier = user?.subscription_tier === 'pro' ? 'pro' : 'free';
+  const svc = await serviceKeyAuth(request, env);
+  const tier: SubscriptionTier =
+    user && resolveTier(user) === 'pro' ? 'pro' : svc?.tier === 'pro' ? 'pro' : 'free';
 
   if (mode === 'truck' && tier !== 'pro') {
     return fail('Truck routing requires a Pro subscription', 403, env);
@@ -1154,6 +1226,7 @@ export default {
       else if (seg[1] === 'auth' && seg[2] === 'issue' && request.method === 'POST') inner = await handleIssue(request, env);
       else if (seg[1] === 'auth' && seg[2] === 'me' && request.method === 'GET') inner = await handleMe(request, env);
       else if (seg[1] === 'auth' && seg[2] === 'account' && request.method === 'DELETE') inner = await handleAccountDelete(request, env);
+      else if (seg[1] === 'entitlement' && seg[2] === 'revcat' && request.method === 'POST') inner = await handleRevCatExchange(request, env);
       else if (seg[1] === 'geocode' && request.method === 'GET') inner = await handleGeocode(request, url, env, ctx);
       else if (seg[1] === 'route' && request.method === 'POST') inner = await handleRoute(request, env, ctx);
       else if (seg[1] === 'parking' && request.method === 'GET') inner = await handleParking(url, env, ctx);
