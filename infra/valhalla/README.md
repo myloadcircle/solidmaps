@@ -23,6 +23,24 @@ static layout the WebAssembly client fetches — see [On-device routing](#on-dev
 That is also why coverage here is a *list*: `scripts/fetch-extracts.sh` takes any number of
 Geofabrik extracts, so widening the build is one line and one rebuild.
 
+## Provisioning a VPS (Option A — build on the box)
+
+One script takes a fresh Ubuntu VPS (Hetzner CX33, 8 GB) to a serving engine:
+
+```bash
+ROUTING_ENGINE_TOKEN=<vault: valhalla-vps-token.txt> \
+VALHALLA_DOMAIN=valhalla.solidmap.app \
+ACME_EMAIL=fbirele@gmail.com \
+sudo -E bash setup-vps.sh
+```
+
+It installs Docker, adds the 4 GB swap net, pulls the estate files from this repo,
+downloads GB+IE extracts, builds tiles (25-40 min, ~8 GB peak), fronts everything with
+Caddy (auto-TLS + bearer gate), and finishes with an end-to-end truck-route verification.
+Prereq: DNS for $VALHALLA_DOMAIN -> the VPS IP (Cloudflare proxy is fine).
+Token lives in the estate vault; the Worker gets the same value via
+`wrangler secret put ROUTING_ENGINE_TOKEN`.
+
 ## Why Valhalla cannot run on Cloudflare
 
 The **native** engine cannot, and the Worker stays on Cloudflare:
