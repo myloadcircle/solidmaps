@@ -19,12 +19,15 @@ if ! command -v docker >/dev/null 2>&1; then
   echo '--- installing docker'
   curl -fsSL https://get.docker.com | sh
 fi
-# Keep docker's layers on /data (the 20 GiB filesystem), not a small root fs.
-mkdir -p /data/docker
-if ! grep -q 'data-root' /etc/docker/daemon.json 2>/dev/null; then
-  mkdir -p /etc/docker
-  echo '{"data-root":"/data/docker"}' > /etc/docker/daemon.json
-  systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true
+# Keep docker's layers on the roomier filesystem: /data only when / is small.
+ROOT_AVAIL_GB=$(df -BG --output=avail / | tail -1 | tr -dc '0-9')
+if [ "${ROOT_AVAIL_GB}" -lt 15 ]; then
+  mkdir -p /data/docker
+  if ! grep -q 'data-root' /etc/docker/daemon.json 2>/dev/null; then
+    mkdir -p /etc/docker
+    echo '{"data-root":"/data/docker"}' > /etc/docker/daemon.json
+    systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true
+  fi
 fi
 docker info --format 'docker ok: {{.ServerVersion}} data-root={{.DockerRootDir}}'
 
