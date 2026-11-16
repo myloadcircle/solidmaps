@@ -35,18 +35,34 @@ if [ "$(id -u)" -ne 0 ]; then
   exit 1
 fi
 
-echo "== [1/6] Docker + swap"
+echo "== [1/6] Docker + swap (disk-aware: free-tier boxes have ~20 GiB)"
+# Small-disk mode (<= 30 GiB root): 2G swap, 1 build thread, post-build pbf cleanup.
+ROOT_GB=$(( $(df -BG --output=size / | tail -1 | tr -dc '0-9') ))
+SMALL_DISK=0
+if [ "${ROOT_GB}" -le 30 ]; then
+  SMALL_DISK=1
+  echo "  root disk ${ROOT_GB}G -> small-disk mode (2G swap, 1 thread, pbfs removed after build)"
+fi
 if ! command -v docker >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com | sh
 fi
+SWAP_GB=4
+[ "${SMALL_DISK}" -eq 1 ] && SWAP_GB=2
 if ! swapon --show | grep -q '/swapfile'; then
-  fallocate -l 4G /swapfile
+  fallocate -l ${SWAP_GB}G /swapfile
   chmod 600 /swapfile
   mkswap /swapfile
   swapon /swapfile
   grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 fi
 sysctl -w vm.swappiness=10 >/dev/null
+
+# Valhalla's docker image is amd64-only — fail loudly on anything else.
+ARCH="$(uname -m)"
+if [ "${ARCH}" != "x86_64" ]; then
+  echo "ERROR: this machine is ${ARCH}; the valhalla-scripted image needs x86_64." >&2
+  exit 1
+fi
 
 echo "== [2/6] firewall (22/80/443 only)"
 if command -v ufw >/dev/null 2>&1; then
@@ -67,12 +83,14 @@ done
 chmod +x scripts/fetch-extracts.sh
 
 echo "== [4/6] .env"
+THREADS=2
+[ "${SMALL_DISK}" -eq 1 ] && THREADS=1   # flatten the build memory peak on 8 GiB boxes
 cat > .env <<ENV
 VALHALLA_DOMAIN=${VALHALLA_DOMAIN}
 ROUTING_ENGINE_TOKEN=${ROUTING_ENGINE_TOKEN}
 ACME_EMAIL=${ACME_EMAIL}
 VALHALLA_USE_TILES_IGNORE_PBF=False
-VALHALLA_THREADS=2
+VALHALLA_THREADS=${THREADS}
 ENV
 chmod 600 .env
 
@@ -102,6 +120,14 @@ LEN=$(grep -o '"length":[0-9.]*' /tmp/sm-route.json | head -1 | cut -d: -f2)
 TIME_MIN=$(( $(grep -o '"time":[0-9.]*' /tmp/sm-route.json | head -1 | cut -d: -f2 | cut -d. -f1) / 60 ))
 if [ "$HTTP" = "200" ]; then
   echo "PASS (${HTTP}, ${LEN}km/${TIME_MIN}min)"
+  if [ "${SMALL_DISK}" -eq 1 ]; then
+    echo "  small-disk cleanup: serving never reads the .pbf files — removing them"
+    rm -f custom_files/*.osm.pbf
+    sed -i 's/VALHALLA_USE_TILES_IGNORE_PBF=False/VALHALLA_USE_TILES_IGNORE_PBF=True/' .env
+    docker compose up -d   # recreate with reuse-tiles so a reboot never rebuilds
+    echo "  reclaimed $(du -sh custom_files 2>/dev/null | cut -f1) — disk now: $(df -h / | tail -1 | awk '{print $4}') free"
+    echo "  TIP: take a provider snapshot NOW — that is the restore point for this box."
+  fi
   cat <<DONE
 
 ===============================================================
