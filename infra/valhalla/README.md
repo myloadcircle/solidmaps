@@ -38,6 +38,11 @@ It installs Docker, adds the 4 GB swap net, pulls the estate files from this rep
 downloads GB+IE extracts, builds tiles (25-40 min, ~8 GB peak), fronts everything with
 Caddy (auto-TLS + bearer gate), and finishes with an end-to-end truck-route verification.
 Prereq: DNS for $VALHALLA_DOMAIN -> the VPS IP (Cloudflare proxy is fine).
+
+The script is provider-agnostic (plain Ubuntu + Docker + 80/443). Valid Stage-1 targets:
+the InstaBox free box (4 vCPU/8 GiB/20 GiB — UK+IE only; disposable rehearsal, snapshot
+after the build passes) or the Hetzner CX33 (~£7.60/mo, 80 GB — the revenue-engine home).
+Stage-2 widening (France/Europe) requires the bigger paid box regardless of provider.
 Token lives in the estate vault; the Worker gets the same value via
 `wrangler secret put ROUTING_ENGINE_TOKEN`.
 
