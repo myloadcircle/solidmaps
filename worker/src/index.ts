@@ -859,6 +859,53 @@ async function handleRevCatExchange(request: Request, env: Env): Promise<Respons
   return json({ upgraded: true, pro_until: expires, source: 'truckroute' }, 200, env);
 }
 
+
+const FEEDBACK_CATEGORIES = ['ukie', 'eu', 'global', 'vehicle-profiles', 'other'];
+const FEEDBACK_MAX = 1000;
+
+/** Shared limiter pattern (KV counter, per-IP per-minute). */
+async function feedbackAllowed(env: Env, ip: string): Promise<boolean> {
+  if (!env.CACHE) return true;
+  const key = 'fb:' + ip;
+  const n = parseInt((await env.CACHE.get(key)) ?? '0', 10);
+  if (n >= 10) return false;
+  await env.CACHE.put(key, String(n + 1), { expirationTtl: 60 });
+  return true;
+}
+
+/**
+ * Driver suggestion box (satnav rollout). Accepts direct submissions (solidmap.app)
+ * and service-key proxies (mytruckroute.app); writes to the shared D1 table.
+ */
+async function handleFeedback(request: Request, env: Env): Promise<Response> {
+  const user = await authUser(request, env);
+  const svc = await serviceKeyAuth(request, env);
+  const ip = request.headers.get('CF-Connecting-IP') ?? 'unknown';
+  if (!(await feedbackAllowed(env, ip))) return fail('Too many suggestions — try again in a minute', 429, env);
+  const body = (await request.json().catch(() => null)) as
+    | { category?: string; message?: string; app_source?: string; user_tier?: string }
+    | null;
+  const category = body?.category ?? '';
+  const message = (body?.message ?? '').trim();
+  if (!FEEDBACK_CATEGORIES.includes(category)) return fail('Pick a valid category', 400, env);
+  if (message.length < 5 || message.length > FEEDBACK_MAX) {
+    return fail('Tell us a little more (5-' + FEEDBACK_MAX + ' characters)', 400, env);
+  }
+  const appSource = svc ? svc.app : 'solidmaps';
+  const tier: string = svc
+    ? (typeof body?.user_tier === 'string' && body.user_tier ? body.user_tier : 'unknown')
+    : user
+      ? resolveTier(user)
+      : 'anonymous';
+  const id = crypto.randomUUID();
+  await env.DB.prepare(
+    'INSERT INTO driver_suggestions (id, app_source, category, message, user_tier, user_id) VALUES (?, ?, ?, ?, ?, ?)'
+  )
+    .bind(id, appSource, category, message, tier, user?.id ?? null)
+    .run();
+  return json({ ok: true }, 200, env);
+}
+
 async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const body = (await request.json().catch(() => null)) as RouteRequest | null;
   if (!body || !validLatLon(body.origin) || !validLatLon(body.destination) || !MODES.includes(body.mode)) {
@@ -875,7 +922,22 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
   }
 
   let profile: VehicleProfile | null = null;
-  if ((mode === 'truck' || mode === 'car') && tier === 'pro' && user && body.vehicle_id) {
+  // Service-key callers (TruckRoute et al.) pass dimensions inline — their UI owns
+  // the vehicle settings, so no SolidMaps profile lookup applies.
+  const inline = (body as { vehicle?: { height_m?: number; weight_kg?: number; axle_count?: number } }).vehicle;
+  if (svc && inline) {
+    profile = {
+      id: 'inline',
+      user_id: 'service',
+      vehicle_type: 'hgv',
+      max_height_meters: typeof inline.height_m === 'number' && inline.height_m > 0 ? inline.height_m : null,
+      gross_weight_kg: typeof inline.weight_kg === 'number' && inline.weight_kg > 0 ? Math.round(inline.weight_kg) : null,
+      axle_count: typeof inline.axle_count === 'number' && inline.axle_count > 0 ? Math.round(inline.axle_count) : null,
+      fuel_type: null,
+      emissions_class: null,
+    };
+  }
+  if (!profile && (mode === 'truck' || mode === 'car') && tier === 'pro' && user && body.vehicle_id) {
     const row = await env.DB.prepare('SELECT * FROM vehicle_profiles WHERE id = ? AND user_id = ?')
       .bind(body.vehicle_id, user.id)
       .first<VehicleProfileRow>();
@@ -891,7 +953,8 @@ async function handleRoute(request: Request, env: Env, ctx: ExecutionContext): P
   // Cache key covers the full stop list so multi-stop responses never collide.
   const r4 = (n: number) => n.toFixed(4);
   const stopsKey = waypoints.map((w) => `${r4(w.lat)},${r4(w.lon)}`).join('|');
-  const routeKey = `route:${r4(origin.lat)},${r4(origin.lon)};${stopsKey};${r4(destination.lat)},${r4(destination.lon)};${mode};${body.vehicle_id ?? 'anon'}`;
+  const vehicleKey = body.vehicle_id ?? (profile ? `i${profile.max_height_meters ?? 0}x${profile.gross_weight_kg ?? 0}x${profile.axle_count ?? 0}` : 'anon');
+  const routeKey = `route:${r4(origin.lat)},${r4(origin.lon)};${stopsKey};${r4(destination.lat)},${r4(destination.lon)};${mode};${vehicleKey}`;
   if (env.CACHE) {
     const cached = await env.CACHE.get(routeKey);
     if (cached) {
@@ -1233,6 +1296,7 @@ export default {
       else if (seg[1] === 'vehicle-profile' && request.method === 'GET') inner = await handleVehicleProfileList(request, env);
       else if (seg[1] === 'vehicle-profile' && request.method === 'POST') inner = await handleVehicleProfileCreate(request, env);
       else if (seg[1] === 'matrix' && request.method === 'POST') inner = await handleMatrix(request, env);
+      else if (seg[1] === 'feedback' && request.method === 'POST') inner = await handleFeedback(request, env);
       else if (seg[1] === 'tiles' && request.method === 'GET') inner = await handleTiles(url, env, ctx);
       else if (seg[1] === 'stripe' && seg[2] === 'webhook' && request.method === 'POST') inner = await handleStripeWebhook(request, env);
       else inner = fail('Not found', 404, env);

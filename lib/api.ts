@@ -50,6 +50,12 @@ export const api = {
       body: JSON.stringify({ email }),
     }),
   getUser: () => request<User>('/auth/me'),
+  /** Driver suggestion box (satnav rollout). */
+  sendFeedback: (category: string, message: string) =>
+    request<{ ok: boolean }>('/feedback', {
+      method: 'POST',
+      body: JSON.stringify({ category, message }),
+    }),
   /** Claim SolidMaps Pro with an active TruckRoute (RevenueCat) subscription. */
   exchangeTruckroute: (appUserId: string) =>
     request<{ upgraded: boolean; pro_until: number | null; source: string }>('/entitlement/revcat', {

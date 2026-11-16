@@ -7,6 +7,11 @@ import RoutePlanner from '@/components/RoutePlanner';
 import ActiveNavigation from '@/components/ActiveNavigation';
 import VehicleProfileManager from '@/components/VehicleProfileManager';
 import Onboarding, { hasSeenOnboarding } from '@/components/Onboarding';
+import RolloutAnnouncement, {
+  SuggestionSheet,
+  hasSeenRollout,
+  markRolloutSeen,
+} from '@/components/RolloutAnnouncement';
 import { useAuth } from '@/lib/auth';
 import { api } from '@/lib/api';
 import type { BridgeCheck } from '@/lib/bridges';
@@ -24,6 +29,8 @@ export default function Home() {
   const [authError, setAuthError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [showRollout, setShowRollout] = useState(false);
+  const [showSuggest, setShowSuggest] = useState(false);
   const [proToast, setProToast] = useState(false);
   const mapRef = useRef<MapView | null>(null);
   const lastPlanRef = useRef<{ origin: LatLon; destination: LatLon; mode: Mode; vehicle_id?: string } | null>(null);
@@ -36,6 +43,14 @@ export default function Home() {
     const t = setTimeout(() => setShowOnboarding(true), 350);
     return () => clearTimeout(t);
   }, []);
+
+  // Satnav rollout announcement: once per device, after onboarding (not stacked on it).
+  useEffect(() => {
+    if (showOnboarding) return;
+    if (hasSeenRollout()) return;
+    const t = setTimeout(() => setShowRollout(true), 600);
+    return () => clearTimeout(t);
+  }, [showOnboarding]);
 
   // Returning from Stripe checkout: confirm the membership landed, then clean the URL.
   useEffect(() => {
@@ -76,6 +91,21 @@ export default function Home() {
       <SolidMap route={route} parkingZones={parkingZones} onMapReady={handleMapReady} />
 
       {showOnboarding && <Onboarding onDone={finishOnboarding} />}
+
+      {!showOnboarding && showRollout && (
+        <RolloutAnnouncement
+          onClose={() => {
+            markRolloutSeen();
+            setShowRollout(false);
+          }}
+          onSuggest={() => {
+            markRolloutSeen();
+            setShowRollout(false);
+            setShowSuggest(true);
+          }}
+        />
+      )}
+      {showSuggest && <SuggestionSheet onClose={() => setShowSuggest(false)} />}
 
       <header className="absolute inset-x-0 top-0 z-30 flex items-center justify-between gap-2 border-b border-slate-700/50 bg-slate-900/80 px-4 py-2 backdrop-blur">
         <h1 className="flex items-center gap-2 text-lg font-bold tracking-tight">
@@ -209,9 +239,22 @@ export default function Home() {
         onBridgeCheck={setBridgeCheck}
       />
       <div className="absolute bottom-4 right-4 z-10 flex items-center gap-3 rounded-md border border-gray-800 bg-gray-900/90 px-3 py-1.5 font-mono text-xs text-gray-400 shadow-lg">
+        <a
+          href="#whats-new"
+          onClick={(e) => {
+            e.preventDefault();
+            setShowRollout(true);
+          }}
+          className="hover:text-slate-200"
+        >
+          What’s new
+        </a>
+        <span aria-hidden="true">·</span>
         <a href="/privacy.html" className="hover:text-slate-200">Privacy</a>
         <span aria-hidden="true">·</span>
         <a href="/terms.html" className="hover:text-slate-200">Terms</a>
+        <span aria-hidden="true">·</span>
+        <a href="https://play.google.com/store/apps/developer?id=Loadcircle" target="_blank" rel="noopener" className="hover:text-slate-200">More apps</a>
       </div>
     </main>
   );

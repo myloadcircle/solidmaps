@@ -33,6 +33,13 @@ export interface BridgeCheck {
   checkedAt: number;
 }
 
+/**
+ * Guardrail: located-restriction AVOIDANCE (rerouting around verified bridges) stays
+ * off until the engine A/B proves it on the UK graph. The located findings list is
+ * advisory and unaffected by this flag.
+ */
+export const ENABLE_VERIFIED_BRIDGE_AVOIDANCE = false;
+
 const SAMPLE_SPACING_M = 300;
 const SAMPLE_DEDUPE_M = 200;
 const NEAR_ROUTE_M = 150;
